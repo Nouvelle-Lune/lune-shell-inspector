@@ -60,6 +60,18 @@ function dockLine(ui: FakeExtensionUi): readonly string[] | undefined {
     return content;
 }
 
+/**
+ * Text of the single dock line mounted below the editor, or undefined when none is mounted.
+ *
+ * The summary embeds wall-clock elapsed seconds, so tests match the line as a pattern instead of
+ * pinning a value that depends on how fast the command ran.
+ */
+function dockText(ui: FakeExtensionUi): string | undefined {
+    const content = dockLine(ui);
+    assert.ok(content === undefined || content.length === 1, "the dock must stay a single line");
+    return content?.[0];
+}
+
 /** Widget calls that mounted or cleared the shell dock. */
 function dockCalls(ui: FakeExtensionUi): number {
     return ui.widgetCalls.filter((call) => call.key === WIDGET_ID).length;
@@ -94,10 +106,10 @@ describe("pi-shell-view session lifecycle", () => {
                 assert.equal(dockCalls(session.ui), 1, "session_start renders once");
 
                 shellManager.startJob({ id: "job-1", command: "sleep 30", cwd: "/tmp" });
-                assert.deepEqual(dockLine(session.ui), ["  Shells · 1 shells · 1 running · sleep 30"]);
+                assert.match(dockText(session.ui) ?? "", /^1 running shell · sleep 30 · \d+s · \/shell to open$/);
 
                 shellManager.completeJob("job-1", "done");
-                assert.deepEqual(dockLine(session.ui), ["  Shells · 1 shells · 1 completed"]);
+                assert.match(dockText(session.ui) ?? "", /^1 shell completed in \d+s · \/shell to open$/);
 
                 assert.equal(dockCalls(session.ui), 3, "expected one render per mutation");
             });
@@ -120,7 +132,7 @@ describe("pi-shell-view session lifecycle", () => {
 
                 assert.equal(dockCalls(first.ui), firstCallsAfterShutdown, "the ended session must not render again");
                 assert.equal(dockCalls(second.ui), secondCallsAfterStart + 1, "the new session must render");
-                assert.deepEqual(dockLine(second.ui), ["  Shells · 1 shells · 1 running · sleep 30"]);
+                assert.match(dockText(second.ui) ?? "", /^1 running shell · sleep 30 · \d+s · \/shell to open$/);
             } finally {
                 await second.host.emit("session_shutdown", second.ctx);
                 removeTempWorkDir(firstDir);
@@ -135,7 +147,7 @@ describe("pi-shell-view session lifecycle", () => {
             const session = await openSession(workDir);
             try {
                 shellManager.startJob({ id: "job-1", command: "sleep 30", cwd: workDir });
-                assert.deepEqual(dockLine(session.ui), ["  Shells · 1 shells · 1 running · sleep 30"]);
+                assert.match(dockText(session.ui) ?? "", /^1 running shell · sleep 30 · \d+s · \/shell to open$/);
 
                 await session.host.emit("session_shutdown", session.ctx);
 
@@ -341,11 +353,11 @@ describe("pi-shell-view session lifecycle", () => {
                     toolCallId: "call-dock",
                 });
 
-                assert.deepEqual(dockLine(session.ui), ["  Shells · 1 shells · 1 running · sleep 1; printf 'late\\n'"]);
+                assert.match(dockText(session.ui) ?? "", /^1 running shell · sleep 1; printf 'lat\.\.\. · \d+s · \/shell to open$/);
 
                 await runningJob;
 
-                assert.deepEqual(dockLine(session.ui), ["  Shells · 1 shells · 1 completed"]);
+                assert.match(dockText(session.ui) ?? "", /^1 shell completed in \d+s · \/shell to open$/);
             });
         });
 

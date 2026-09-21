@@ -10,9 +10,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBashTool } from "@earendil-works/pi-coding-agent";
 
-import { clearShellDock, renderShellDock } from "./shell/shell-dock.ts";
+import { shellDock } from "./shell/shell-dock.ts";
 
 import { shellManager } from "./shell/shell-manager.ts"
+
+import { openShellInspector } from "./shell/shell-inspector.ts";
 
 import { getAgentToolTextResult } from "./utils/get-agent-tool-result.ts";
 
@@ -35,16 +37,18 @@ export default function (pi: ExtensionAPI): void {
         // with an explicitly empty shell view.
         shellManager.clearAllJobs();
 
+        shellDock.setCtx(ctx)
+
         // Drop the previous session's listener first: it closes over a stale
         // ctx, and duplicate subscriptions would render twice per job update.
         unsubscribeShellManager?.();
 
         unsubscribeShellManager =
             shellManager.subscribe(() => {
-                renderShellDock(ctx);
+                shellDock.render();
             });
 
-        renderShellDock(ctx);
+        shellDock.render();
     });
 
     pi.on("session_shutdown", (_event, ctx) => {
@@ -52,7 +56,7 @@ export default function (pi: ExtensionAPI): void {
         // listener would re-render the dock after it was removed.
         unsubscribeShellManager?.();
         unsubscribeShellManager = undefined;
-        clearShellDock(ctx);
+        shellDock.clear();
         shellManager.clearAllJobs();
     });
 
@@ -130,6 +134,18 @@ export default function (pi: ExtensionAPI): void {
                 // Rethrow so pi still reports the failure to the model.
                 throw error;
             }
+        },
+    });
+
+    pi.registerCommand("shell", {
+        description: "Open the shell inspector",
+
+        handler: async (_args, ctx) => {
+            if (ctx.mode !== "tui") {
+                return;
+            }
+
+            await openShellInspector(ctx);
         },
     });
 }

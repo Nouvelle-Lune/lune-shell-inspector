@@ -9,9 +9,12 @@
  * it draws into the caller's terminal (or into the pty created by `script`), and its exit code is
  * forwarded unchanged.
  *
- * Two scenarios exist:
+ * Three scenarios exist:
  *
  * - `fixture` (default): one scripted bash call, for the dock's own behaviour.
+ * - `shelldocksum`: `shelldock-summary-scenario.ts` queues three bash turns that walk the dock
+ *   through every summary shape (one running, one completed, mixed counts, a failure, stopped
+ *   shells), so the line can be read in the real TUI.
  * - `subagent`: `subagent-scenario.ts` registers the same faux provider plus an offline probe agent,
  *   and its first scripted turn asks for a bash call and a foreground subagent call at once. pi
  *   runs sibling tool calls concurrently, so the shell dock and pi-subagents' own below-editor
@@ -36,6 +39,9 @@ const DEFAULT_FIXTURE_ID = "progress";
 /** Scenario id that additionally loads pi-subagents and drives one foreground subagent. */
 const SUBAGENT_SCENARIO = "subagent";
 
+/** Scenario id that walks the shell dock through every summary shape. */
+const SHELLDOCK_SUMMARY_SCENARIO = "shelldocksum";
+
 /** Observer variables read by the scenario scripts; forwarded to the child process. */
 const PI_SHELL_VIEW_VARS = [
     "PI_SHELL_VIEW_SCENARIO",
@@ -45,7 +51,7 @@ const PI_SHELL_VIEW_VARS = [
     "PI_SHELL_VIEW_TIMEOUT",
 ] as const;
 
-const USAGE = `Usage: npm run tui:demo [-- <fixture-id>|subagent]
+const USAGE = `Usage: npm run tui:demo [-- <fixture-id>|shelldocksum|subagent]
        PI_SHELL_VIEW_COMMAND=... npm run tui:demo
 
 Starts the real pi TUI with a scripted faux model and the extension in src/index.ts; the model asks
@@ -54,6 +60,7 @@ pi draws the rows with its built-in bash renderers.
 
   npm run tui:demo                        # default fixture: ${DEFAULT_FIXTURE_ID}
   npm run tui:demo -- failing             # fixture id from test/fixtures/long-running-scripts.ts
+  npm run tui:demo -- shelldocksum        # every shell dock summary shape, one after another
   npm run tui:demo -- subagent            # shell dock + pi-subagents widget at the same time
   PI_SHELL_VIEW_COMMAND="ls -la" npm run tui:demo
   PI_SHELL_VIEW_TIMEOUT=5 npm run tui:demo -- flood
@@ -69,9 +76,17 @@ What to watch for in the fixture scenario: the extension's notification "command
 (success, truncation warning or the failure text for a failing fixture) and the scripted closing
 line "fixture finished".
 
-What to watch for in the subagent scenario: the shell dock line "  Shells · 1 shells · 1 running ·
-<command>" below the editor while the subagent runs, pi-subagents' own widget next to it, and both
-disappearing as their runs settle ("fixture finished" and "probe finished").
+What to watch for in the shelldocksum scenario: the dock below the editor walks through its summary
+shapes without any keyboard input - "1 running shell · <command> · <Ns> · /shell to open" with the
+seconds ticking, then "1 shell completed in <Ns> · /shell to open", then the count list of a mixed
+list ("3 shells · 2 running · 1 completed · /shell to open" ... "3 shells · 1 running ·
+1 completed · 1 failed · /shell to open"), and finally "5 shells · 2 running ·
+2 completed · 1 failed · /shell to open". Pressing Esc while the last two
+sleeps run aborts them and the settled line reports the stopped shells.
+
+What to watch for in the subagent scenario: the shell dock line "1 running shell · <command> ·
+<Ns> · /shell to open" below the editor while the subagent runs, pi-subagents' own widget next to it,
+and both disappearing as their runs settle ("fixture finished" and "probe finished").
 
 pi loads the extensions and stays interactive; quit it with Ctrl+D, Ctrl+C or /quit. The scripted
 session holds only the queued responses, so any further turn answers "No more faux responses queued".
@@ -87,10 +102,18 @@ function positional(argv: string[]): string | undefined {
     return argv[0];
 }
 
-/** True when the run should use the subagent scenario. */
-function wantsSubagentScenario(argv: string[]): boolean {
+/** Scenario named by the positional argument or `PI_SHELL_VIEW_SCENARIO`, if any. */
+type TuiScenario = typeof SHELLDOCK_SUMMARY_SCENARIO | typeof SUBAGENT_SCENARIO;
+
+/** Every scenario id the launcher knows; anything else is treated as a fixture id. */
+function isScenario(selection: string | undefined): selection is TuiScenario {
+    return selection === SHELLDOCK_SUMMARY_SCENARIO || selection === SUBAGENT_SCENARIO;
+}
+
+/** Scenario of this run: positional argument first, then `PI_SHELL_VIEW_SCENARIO`. */
+function selectedScenario(argv: string[]): TuiScenario | undefined {
     const selection = positional(argv) ?? process.env.PI_SHELL_VIEW_SCENARIO;
-    return selection === SUBAGENT_SCENARIO;
+    return isScenario(selection) ? selection : undefined;
 }
 
 /** Fixture id of this run: positional argument first, then `PI_SHELL_VIEW_FIXTURE`, then the default. */
@@ -140,6 +163,18 @@ function childEnv(): NodeJS.ProcessEnv {
     return env;
 }
 
+/** Extensions pi loads for a scenario, in load order; the fixture scenario needs no scenario extension. */
+function scenarioExtensions(scenario: TuiScenario | undefined): string[] {
+    switch (scenario) {
+        case SUBAGENT_SCENARIO:
+            return [repoFile("subagent-scenario.ts"), resolveSubagentExtension(), repoFile("../../src/index.ts")];
+        case SHELLDOCK_SUMMARY_SCENARIO:
+            return [repoFile("shelldock-summary-scenario.ts"), repoFile("../../src/index.ts")];
+        default:
+            return [repoFile("scripted-provider.ts"), repoFile("../../src/index.ts")];
+    }
+}
+
 function main(): void {
     const argv = process.argv.slice(2);
     if (argv[0] === "--help" || argv[0] === "-h") {
@@ -147,10 +182,8 @@ function main(): void {
         return;
     }
 
-    const subagentScenario = wantsSubagentScenario(argv);
-    const extensions = subagentScenario
-        ? [repoFile("subagent-scenario.ts"), resolveSubagentExtension(), repoFile("../../src/index.ts")]
-        : [repoFile("scripted-provider.ts"), repoFile("../../src/index.ts")];
+    const scenario = selectedScenario(argv);
+    const extensions = scenarioExtensions(scenario);
 
     const args = [
         "--no-extensions",
@@ -164,12 +197,17 @@ function main(): void {
         "-np",
         "-ns",
         "--offline",
-        subagentScenario ? "run the shell-view subagent fixture" : "run the shell-view fixture",
+        scenario === SUBAGENT_SCENARIO
+            ? "run the shell-view subagent fixture"
+            : scenario === SHELLDOCK_SUMMARY_SCENARIO
+                ? "run the shell-view dock summary fixture"
+                : "run the shell-view fixture",
     ];
 
     const child = spawn("pi", args, {
         stdio: "inherit",
-        env: subagentScenario ? childEnv() : { ...childEnv(), PI_SHELL_VIEW_FIXTURE: fixtureId(argv) },
+        // Only the fixture scenario reads the fixture id; a scenario ignores it.
+        env: scenario === undefined ? { ...childEnv(), PI_SHELL_VIEW_FIXTURE: fixtureId(argv) } : childEnv(),
     });
 
     child.on("error", (error) => {

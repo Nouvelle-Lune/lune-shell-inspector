@@ -11,9 +11,10 @@
  * - a minimal fake host that captures registered tools and `pi.on` handlers, so a test can fire
  *   `session_start` / `session_shutdown` itself;
  * - a fake extension context whose `ui.setWidget` models pi's real keyed widget registry
- *   (`setExtensionWidget`: placement buckets, key replacement, reinsertion moves a key to the end);
+ *   (`setExtensionWidget`: placement buckets, key replacement, reinsertion moves a key to the end),
+ *   and whose `ui.theme.fg` records every colour request while returning the text unstyled;
  * - real command execution through the delegated implementation.
- * Renderers, themes and the TUI itself are not simulated; the real TUI is observed through
+ * Renderers and the TUI itself are not simulated; the real TUI is observed through
  * `test/tui`.
  */
 import { mkdtempSync, rmSync } from "node:fs";
@@ -127,6 +128,12 @@ export interface NotifyCall {
     type: string | undefined;
 }
 
+/** One captured `theme.fg` request, in call order. */
+export interface ThemeFgCall {
+    color: string;
+    text: string;
+}
+
 /**
  * Extension UI fake with pi's widget semantics.
  *
@@ -134,10 +141,14 @@ export interface NotifyCall {
  * key, `undefined` removes the key, and re-setting an existing key removes then re-inserts it, so
  * the key moves to the end of its bucket (the behaviour pi-subagents' renderer explicitly works
  * around). Every call is also captured verbatim so tests can assert what the extension asked for.
+ * `theme.fg` records its colour and returns the text unchanged: the tests assert the readable line
+ * and the requested colour separately, instead of an ANSI escape sequence.
  */
 export interface FakeExtensionUi {
     readonly notifyCalls: readonly NotifyCall[];
     readonly widgetCalls: readonly WidgetCall[];
+    readonly fgCalls: readonly ThemeFgCall[];
+    readonly theme: { fg(color: string, text: string): string };
     notify(message: string, type?: string): void;
     setWidget(key: string, content: WidgetContent | undefined, options?: { placement?: WidgetPlacement }): void;
     /** Content currently mounted for `key`, or `undefined` when the key is not mounted. */
@@ -154,10 +165,19 @@ export function createFakeUi(): FakeExtensionUi {
     };
     const notifyCalls: NotifyCall[] = [];
     const widgetCalls: WidgetCall[] = [];
+    const fgCalls: ThemeFgCall[] = [];
 
     return {
         notifyCalls,
         widgetCalls,
+        fgCalls,
+
+        theme: {
+            fg(color, text) {
+                fgCalls.push({ color, text });
+                return text;
+            },
+        },
 
         notify(message, type) {
             notifyCalls.push({ message, type });
@@ -220,17 +240,26 @@ export type PiEventName = "session_start" | "session_shutdown";
 export type PiEventHandler = (event: unknown, ctx: ExtensionContext, ...rest: unknown[]) => unknown;
 
 /**
- * Minimal fake pi host: captures `registerTool` definitions and `pi.on` handlers.
+ * Minimal fake pi host: captures `registerTool` definitions, `registerCommand` handlers and
+ * `pi.on` handlers.
  *
  * A real pi fires the session events itself; a test drives them through {@link emit} so it controls
  * when the extension subscribes to the shell manager and which context renders the dock.
  */
 export interface FakePiHost {
     readonly registeredTools: readonly BashToolDefinition[];
+    readonly registeredCommands: readonly RegisteredCommand[];
     /** Fire one extension event with the given context, awaiting every handler. */
     emit(event: PiEventName, ctx: ExtensionContext): Promise<void>;
     /** Currently registered handlers for an event, in registration order. */
     handlers(event: PiEventName): readonly PiEventHandler[];
+}
+
+/** A custom command the extension registered with `pi.registerCommand`. */
+export interface RegisteredCommand {
+    name: string;
+    description: string | undefined;
+    handler: (args: string, ctx: ExtensionContext) => Promise<void> | void;
 }
 
 /**
@@ -243,11 +272,22 @@ export interface FakePiHost {
 export function registerExtension(cwd: string): FakePiHost {
     const previousCwd = process.cwd();
     const registeredTools: BashToolDefinition[] = [];
+    const registeredCommands: RegisteredCommand[] = [];
     const handlersByEvent = new Map<PiEventName, PiEventHandler[]>();
 
     const api = {
         registerTool: (tool: BashToolDefinition) => {
             registeredTools.push(tool);
+        },
+        registerCommand: (
+            name: string,
+            options: Omit<RegisteredCommand, "name">,
+        ) => {
+            registeredCommands.push({
+                name,
+                description: options.description,
+                handler: options.handler,
+            });
         },
         on: (event: PiEventName, handler: PiEventHandler) => {
             const handlers = handlersByEvent.get(event) ?? [];
@@ -275,6 +315,7 @@ export function registerExtension(cwd: string): FakePiHost {
 
     return {
         registeredTools,
+        registeredCommands,
         handlers: (event) => handlersByEvent.get(event) ?? [],
         async emit(event, ctx) {
             for (const handler of handlersByEvent.get(event) ?? []) {

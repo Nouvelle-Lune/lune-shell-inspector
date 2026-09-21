@@ -16,11 +16,12 @@ What is real and what is scripted:
 | rendering | pi's own TUI and its built-in bash renderers, merged by tool name (the extension ships none) | — |
 | network | nothing: `--offline`, no API key, no provider request | — |
 
-Two scenarios exist:
+Three scenarios exist:
 
 | scenario | command | what it shows |
 | --- | --- | --- |
 | `fixture` (default) | `npm run tui:demo [-- <fixture-id>]` | one scripted `bash` call and how the row and the shell dock behave |
+| `shelldocksum` | `npm run tui:demo -- shelldocksum` | three scripted turns that walk the shell dock through every summary shape: one running, one completed, mixed counts, a failure and (after Esc) stopped shells |
 | `subagent` | `npm run tui:demo -- subagent` | a `bash` call and a foreground subagent running at the same time, so the shell dock and pi-subagents' own widget share the below-editor area |
 
 ## Files
@@ -28,6 +29,9 @@ Two scenarios exist:
 - `scripted-provider.ts` – pi extension for the fixture scenario. Registers `fauxProvider()` and
   queues exactly two responses: a `fauxToolCall("bash", { command[, timeout] })` with
   `stopReason: "toolUse"`, then the closing line `fixture finished`.
+- `shelldock-summary-scenario.ts` – pi extension for the shelldocksum scenario. Queues three bash
+  turns: the log fixture alone, a long `sleep` next to the failing fixture, then two long sleeps
+  that can be aborted with Esc. The sequence is fixed; no observer variable changes it.
 - `subagent-scenario.ts` – pi extension for the subagent scenario. Registers the same faux provider
   and, during `session_start`, registers the offline probe agent `pi-shell-view-probe` with
   pi-subagents through the `pi-subagents:runtime-agent-register:v1` event. Its scripted responses
@@ -48,6 +52,10 @@ pi is invoked as (absolute paths come from `import.meta.url`):
 pi --no-extensions -e <repo>/test/tui/scripted-provider.ts -e <repo>/src/index.ts \
    --provider faux --model faux-1 --no-session -nc -np -ns --offline "run the shell-view fixture"
 
+# shelldocksum scenario
+pi --no-extensions -e <repo>/test/tui/shelldock-summary-scenario.ts -e <repo>/src/index.ts \
+   --provider faux --model faux-1 --no-session -nc -np -ns --offline "run the shell-view dock summary fixture"
+
 # subagent scenario
 pi --no-extensions -e <repo>/test/tui/subagent-scenario.ts -e <pi-subagents>/index.js -e <repo>/src/index.ts \
    --provider faux --model faux-1 --no-session -nc -np -ns --offline "run the shell-view subagent fixture"
@@ -63,6 +71,7 @@ without a subagent.
 ```
 npm run tui:demo                          # default fixture: progress
 npm run tui:demo -- failing               # any fixture id from test/fixtures/long-running-scripts.ts
+npm run tui:demo -- shelldocksum          # every shell dock summary shape, one after another
 npm run tui:demo -- subagent              # shell dock + pi-subagents widget at the same time
 npm run tui:demo -- --help                # usage text, exit code 0
 PI_SHELL_VIEW_COMMAND="ls -la" npm run tui:demo
@@ -100,8 +109,12 @@ pi:
    in the built-in `Command exited with code 3` message. A bash tool timeout is reported as
    `Command timed out after N seconds`: `PI_SHELL_VIEW_TIMEOUT=1 npm run tui:demo -- progress` kills
    the two-second fixture after one second and shows exactly that.
-5. `  Shells · …` – the shell dock below the editor: `N shells`, the per-status counts and the latest
-   running command, mounted under the widget key `pi-shell-view` with `placement: "belowEditor"`.
+5. `1 running shell · …` / `3 shells · …` – the shell dock below the editor, mounted under the
+   widget key `pi-shell-view` with `placement: "belowEditor"`. With exactly one running shell and
+   nothing else it shows the command, the ticking elapsed seconds and the `/shell to open` hint; with
+   exactly one completed shell it shows `1 shell completed in <Ns> · /shell to open`; otherwise it
+   lists the non-zero per-status counts (`N shells · … · /shell to open`). The `shelldocksum` scenario
+   walks through these shapes.
 6. `fixture finished` – the scripted model's closing line, once the tool result came back.
 
 In the subagent scenario the interesting moment is step 3 of the parent command, while the probe is
@@ -109,8 +122,8 @@ still running. The below-editor area then shows two lines from two extensions:
 
 ```
 ──────────────────────────────────────────────────────────
-   Shells · 1 shells · 1 running · sleep 30                 ← pi-shell-view (this extension)
-  1 active agent · ↓ 1.2k window · ↓/← to inspect           ← pi-subagents fleet surface
+   1 running shell · sleep 30 · 0s · /shell to open   ← pi-shell-view (this extension)
+  1 active agent · ↓ 1.2k window · ↓/← to inspect     ← pi-subagents fleet surface
 ~/.pi/agent/local-extensions/pi-shell-view (main)
 ↑7.2k ↓33 W7.2k CH0.0% 11.2%/128k (auto)     (faux) faux-1
 ```
@@ -121,6 +134,21 @@ last; the order of the two lines may therefore change while the command runs. Th
 not a conflict between the extensions - the automated coexistence contract is asserted in
 `test/integration/subagent-widget.test.ts`.
 
+In the shelldocksum scenario the dock alone tells the story, in this order (about 2s + 6s + 8s):
+
+```
+1 running shell · bash /…/log-stream.sh · 0s · /shell to open      ← turn 1, one shell alone (the seconds tick)
+1 shell completed in 2s · /shell to open
+3 shells · 2 running · 1 completed · /shell to open               ← turn 2, mixed list
+3 shells · 1 running · 1 completed · 1 failed · /shell to open    ← the failing fixture landed
+5 shells · 2 running · 2 completed · 1 failed · /shell to open     ← turn 3, two long sleeps
+5 shells · 4 completed · 1 failed · /shell to open                 ← both sleeps settled
+```
+
+Pressing Esc while the last two sleeps run aborts them, and the settled line then counts the stopped
+shells (for example `5 shells · 2 completed · 1 failed · 2 stopped · /shell to open`). The automated
+shape of every one of these lines is asserted in `test/unit/shell-dock.test.ts`.
+
 ## Capturing the TUI as evidence
 
 `script` gives pi a pty; the `(sleep 20)` keeps stdin open so pi stays interactive until `timeout`
@@ -129,6 +157,7 @@ kills it (exit code 124, which is expected for these runs).
 ```
 (sleep 20) | timeout 35 script -q /tmp/pisv-tui-progress.log npm run tui:demo -- progress >/dev/null 2>&1
 (sleep 20) | timeout 35 script -q /tmp/pisv-tui-failing.log  npm run tui:demo -- failing  >/dev/null 2>&1
+(sleep 30) | timeout 45 script -q /tmp/pisv-tui-shelldocksum.log npm run tui:demo -- shelldocksum >/dev/null 2>&1
 (sleep 45) | timeout 60 script -q /tmp/pisv-tui-subagent.log \
   env PI_SHELL_VIEW_COMMAND="sleep 30" PI_SHELL_VIEW_PROBE_COMMAND="sleep 25" \
   npm run tui:demo -- subagent >/dev/null 2>&1

@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
-import { clearShellDock, renderShellDock } from "../../src/shell/shell-dock.ts";
+import { shellDock } from "../../src/shell/shell-dock.ts";
 import { shellManager } from "../../src/shell/shell-manager.ts";
 import {
     createFakeUi,
@@ -54,6 +54,18 @@ function dockLine(ui: FakeExtensionUi): readonly string[] | undefined {
     return content;
 }
 
+/**
+ * Text of the single dock line mounted below the editor, or undefined when none is mounted.
+ *
+ * The summary embeds wall-clock elapsed seconds, so tests match the line as a pattern instead of
+ * pinning a value that depends on how fast the command ran.
+ */
+function dockText(ui: FakeExtensionUi): string | undefined {
+    const content = dockLine(ui);
+    assert.ok(content === undefined || content.length === 1, "the dock must stay a single line");
+    return content?.[0];
+}
+
 /** Every widget key touched by the extension, i.e. every call after the test's own mounts. */
 function keysTouchedSince(ui: FakeExtensionUi, index: number): Set<string> {
     return new Set(ui.widgetCalls.slice(index).map((call) => call.key));
@@ -85,7 +97,7 @@ describe("shell dock next to pi-subagents widgets", () => {
             });
 
             assert.equal(run.failed, false, `expected the command to succeed: ${run.error?.message ?? ""}`);
-            assert.deepEqual(dockLine(session.ui), ["  Shells · 1 shells · 1 completed"]);
+            assert.match(dockText(session.ui) ?? "", /^1 shell completed in \d+s · \/shell to open$/);
 
             assert.equal(
                 session.ui.mountedWidget("belowEditor", SUBAGENT_FLEET_KEY),
@@ -129,7 +141,7 @@ describe("shell dock next to pi-subagents widgets", () => {
                 "no shell update may replace the fleet widget",
             );
             assert.deepEqual(keysTouchedSince(session.ui, extensionCallBaseline), new Set([SH_DOCK_KEY]));
-            assert.deepEqual(dockLine(session.ui), ["  Shells · 1 shells · 1 completed"]);
+            assert.match(dockText(session.ui) ?? "", /^1 shell completed in \d+s · \/shell to open$/);
         } finally {
             await session.host.emit("session_shutdown", session.ctx);
             removeTempWorkDir(workDir);
@@ -150,7 +162,7 @@ describe("shell dock next to pi-subagents widgets", () => {
             const content = session.ui.mountedWidget("belowEditor", SH_DOCK_KEY);
             assert.ok(Array.isArray(content), "the dock must be mounted as an array of lines");
             assert.equal(content.length, 1, "the dock must render exactly one line");
-            assert.match(content[0] ?? "", /^ {2}Shells · 12 shells · 12 running · sleep 11$/);
+            assert.match(content[0] ?? "", /^12 shells · 12 running · \/shell to open$/);
         } finally {
             await session.host.emit("session_shutdown", session.ctx);
             removeTempWorkDir(workDir);
@@ -204,7 +216,7 @@ describe("shell dock next to pi-subagents widgets", () => {
             assert.equal(dockLine(session.ui), undefined, "the dock must be gone");
             assert.equal(session.ui.mountedWidget("belowEditor", SUBAGENT_FLEET_KEY), fleetWidget);
 
-            renderShellDock(session.ctx);
+            shellDock.render();
             assert.equal(dockLine(session.ui), undefined, "rendering an empty job list must keep the dock cleared");
             assert.equal(session.ui.mountedWidget("belowEditor", SUBAGENT_FLEET_KEY), fleetWidget);
         } finally {
@@ -234,15 +246,16 @@ describe("shell dock next to pi-subagents widgets", () => {
     });
 
     it("leaves every widget alone when the session has no UI", async () => {
-        // Contract: renderShellDock/clearShellDock return early without a UI, so a print-mode session
-        // (or an RPC context that has no widget surface) cannot drop the subagent widgets.
+        // Contract: the dock returns early without a UI, so a print-mode session (or an RPC context
+        // that has no widget surface) cannot drop the subagent widgets.
         const ui = createFakeUi();
         const fleetWidget = subagentWidget("subagent fleet · 1 running");
         ui.setWidget(SUBAGENT_FLEET_KEY, fleetWidget, { placement: "belowEditor" });
         const ctx = createFakeContext("/work", { ui, hasUI: false });
 
-        renderShellDock(ctx);
-        clearShellDock(ctx);
+        shellDock.setCtx(ctx);
+        shellDock.render();
+        shellDock.clear();
 
         assert.deepEqual(ui.widgetCalls.map((call) => call.key), [SUBAGENT_FLEET_KEY], "only the test's own mount may be recorded");
         assert.equal(ui.mountedWidget("belowEditor", SUBAGENT_FLEET_KEY), fleetWidget);
@@ -261,9 +274,7 @@ describe("shell dock next to pi-subagents widgets", () => {
                 toolCallId: "call-subagent-starts",
             });
 
-            assert.deepEqual(dockLine(session.ui), [
-                "  Shells · 1 shells · 1 running · for n in 1 2 3 4; do echo x; sleep 0.25; done",
-            ]);
+            assert.match(dockText(session.ui) ?? "", /^1 running shell · for n in 1 2 3 4; do\.\.\. · \d+s · \/shell to open$/);
 
             const fleetWidget = subagentWidget("subagent fleet · 1 running");
             session.ui.setWidget(SUBAGENT_FLEET_KEY, fleetWidget, { placement: "belowEditor" });
@@ -272,7 +283,7 @@ describe("shell dock next to pi-subagents widgets", () => {
             await command;
 
             assert.equal(session.ui.mountedWidget("belowEditor", SUBAGENT_FLEET_KEY), fleetWidget);
-            assert.deepEqual(dockLine(session.ui), ["  Shells · 1 shells · 1 completed"]);
+            assert.match(dockText(session.ui) ?? "", /^1 shell completed in \d+s · \/shell to open$/);
             assert.deepEqual(keysTouchedSince(session.ui, extensionCallBaseline), new Set([SH_DOCK_KEY]));
         } finally {
             await session.host.emit("session_shutdown", session.ctx);

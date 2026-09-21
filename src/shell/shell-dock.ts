@@ -1,118 +1,137 @@
-
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { shellManager } from "./shell-manager.ts";
 
-import {
-    shellManager,
-    type ShellJob,
-} from "./shell-manager.ts";
 
-// Stable id: setWidget(id, undefined) is the only way to remove the row.
 const WIDGET_ID = "pi-shell-view";
+const PEDDING = "";
 
-// Commands can span lines (heredocs, chained commands); the dock renders one row.
-function normalizeCommand(command: string): string {
-    return command.replace(/\s+/g, " ").trim();
-}
+export class ShellDock {
+    private refreshTimer: ReturnType<typeof setInterval> | undefined;
+    private selected = false;
+    private ctx: ExtensionContext | undefined;
 
-function truncateCommand(
-    command: string,
-    maxLength: number,
-): string {
-    const normalized = normalizeCommand(command);
+    constructor() { };
 
-    if (normalized.length <= maxLength) {
-        return normalized;
+    private syncRefreshTimer(): void {
+        const hasRunningJobs = shellManager.jobsStatusStat.runningCount > 0;
+
+        if (hasRunningJobs && !this.refreshTimer) {
+            this.refreshTimer = setInterval(() => {
+                this.render();
+            }, 1000);
+        }
+
+        if (!hasRunningJobs && this.refreshTimer) {
+            clearInterval(this.refreshTimer);
+            this.refreshTimer = undefined;
+        }
     }
 
-    // Reserve one cell for the ellipsis so the row stays within maxLength.
-    return `${normalized.slice(0, maxLength - 1)}…`;
-}
-
-// Jobs keep insertion order, so reversing yields the newest running command;
-// the dock shows only one.
-function getLatestRunningJob(
-    jobs: readonly Readonly<ShellJob>[],
-): Readonly<ShellJob> | undefined {
-    return [...jobs]
-        .reverse()
-        .find((job) => job.status === "running");
-}
-
-export function renderShellDock(
-    ctx: ExtensionContext,
-): void {
-    // Non-interactive sessions have no widget surface.
-    if (!ctx.hasUI) {
-        return;
+    setCtx(ctx: ExtensionContext): void {
+        this.ctx = ctx;
     }
 
-    const jobs = shellManager.getAllJobsList();
+    setSelected(selected: boolean): void {
+        if (this.selected === selected) {
+            return;
+        }
 
-    // Remove the widget rather than leaving an empty row.
-    if (jobs.length === 0) {
-        ctx.ui.setWidget(WIDGET_ID, undefined);
-        return;
+        this.selected = selected;
+        this.render();
     }
 
-    const running = jobs.filter(
-        (job) => job.status === "running",
-    ).length;
-
-    const completed = jobs.filter(
-        (job) => job.status === "completed",
-    ).length;
-
-    const failed = jobs.filter(
-        (job) => job.status === "failed",
-    ).length;
-
-    const stopped = jobs.filter(
-        (job) => job.status === "stopped",
-    ).length;
-
-    const parts = [
-        `${jobs.length} shells`,
-    ];
-
-    if (running > 0) {
-        parts.push(`${running} running`);
+    isSelected(): boolean {
+        return this.selected;
     }
 
-    if (completed > 0) {
-        parts.push(`${completed} completed`);
-    }
+    render(): void {
+        if (!this.ctx || !this.ctx.hasUI) { return; }
 
-    if (failed > 0) {
-        parts.push(`${failed} failed`);
-    }
+        this.syncRefreshTimer();
 
-    if (stopped > 0) {
-        parts.push(`${stopped} stopped`);
-    }
+        const jobs = shellManager.getAllJobsList();
 
-    const activeJob = getLatestRunningJob(jobs);
+        if (jobs.length === 0) {
+            this.selected = false;
+            this.ctx.ui.setWidget(WIDGET_ID, undefined);
+            return;
+        }
 
-    if (activeJob) {
-        parts.push(
-            truncateCommand(activeJob.command, 60),
+        const summary = shellDockSummary(this.ctx);
+
+        this.ctx.ui.setWidget(
+            WIDGET_ID,
+            [this.ctx.ui.theme.fg(
+                this.selected ? "accent" : "dim",
+                `${PEDDING}${summary} · /shell to open`,
+            )],
+            {
+                placement: "belowEditor",
+            },
         );
     }
 
-    ctx.ui.setWidget(
-        WIDGET_ID,
-        [`  Shells · ${parts.join(" · ")}`],
-        {
-            placement: "belowEditor",
-        },
-    );
+    clear(): void {
+        // Stopping the timer is independent of the UI: a
+        // session that ends must
+        // not keep rendering through its refresh interval.
+        if (this.refreshTimer) {
+            clearInterval(this.refreshTimer);
+            this.refreshTimer = undefined;
+        }
+
+        if (!this.ctx || !this.ctx.hasUI) { return; }
+
+        this.selected = false;
+        this.ctx.ui.setWidget(WIDGET_ID, undefined);
+    }
 }
 
-export function clearShellDock(
-    ctx: ExtensionContext,
-): void {
-    if (!ctx.hasUI) {
-        return;
+function shellDockSummary(ctx: ExtensionContext): string {
+    const status = shellManager.getAllJobsStatusStat();
+
+    // only one running shell case
+    if (
+        status.runningCount === 1 &&
+        status.completedCount === 0 &&
+        status.failedCount === 0 &&
+        status.stoppedCount === 0
+    ) {
+        const runningJob = shellManager.getRunningJobsList()[0];
+        const elapsedTime = Math.floor((Date.now() - runningJob!.startedAt) / 1000);
+        return (ctx.ui.theme.fg("accent", `${status.runningCount} running shell`) + ` · ${truncateOutput(runningJob!.command, 20)} · ${elapsedTime}s`);
+    }
+    // only one completed shell case
+    if (status.completedCount === 1 && status.runningCount === 0 && status.failedCount === 0 && status.stoppedCount === 0) {
+        const completedJob = shellManager.getCompletedJobsList()[0];
+        const elapsedTime = Math.floor((completedJob!.finishedAt! - completedJob!.startedAt) / 1000);
+        return (ctx.ui.theme.fg("success", `${status.completedCount} shell completed`) + ` in ${elapsedTime}s`);
     }
 
-    ctx.ui.setWidget(WIDGET_ID, undefined);
+    const parts: string[] = [];
+    parts.push(`${shellManager.getAllJobsList().length} shells`);
+
+    if (status.runningCount > 0) {
+        parts.push(ctx.ui.theme.fg("accent", `${status.runningCount} running`));
+    }
+    if (status.completedCount > 0) {
+        parts.push(ctx.ui.theme.fg("success", `${status.completedCount} completed`));
+    }
+    if (status.failedCount > 0) {
+        parts.push(ctx.ui.theme.fg("error", `${status.failedCount} failed`));
+    }
+    if (status.stoppedCount > 0) {
+        parts.push(`${status.stoppedCount} stopped`);
+    }
+
+    return `${parts.join(" · ")}`;
 }
+
+function truncateOutput(output: string, maxLength: number): string {
+    if (output.length <= maxLength) {
+        return output;
+    }
+    return output.slice(0, maxLength) + "...";
+}
+
+export const shellDock = new ShellDock();

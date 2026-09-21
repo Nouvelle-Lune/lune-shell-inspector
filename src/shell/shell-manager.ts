@@ -21,11 +21,35 @@ export interface ShellJob {
     error?: string;
 }
 
-export type ShellManagerListener = () => void;
+interface JobsStatusStat {
+    runningCount: number;
+    completedCount: number;
+    failedCount: number;
+    stoppedCount: number;
+}
+
+type ShellManagerEvent =
+    | { type: "job-started"; id: string }
+    | { type: "job-completed"; id: string }
+    | { type: "job-failed"; id: string }
+    | { type: "job-stopped"; id: string }
+    | { type: "jobs-cleared" }
+    | { type: "output-updated"; id: string };
+
+export type ShellManagerListener = (event: ShellManagerEvent) => void;
 
 export class ShellManager {
     private readonly jobs = new Map<string, ShellJob>();
     private readonly listeners = new Set<ShellManagerListener>();
+    readonly jobsStatusStat: JobsStatusStat;
+    constructor() {
+        this.jobsStatusStat = {
+            runningCount: 0,
+            completedCount: 0,
+            failedCount: 0,
+            stoppedCount: 0,
+        };
+    }
 
     startJob(input: {
         id: string;
@@ -50,7 +74,12 @@ export class ShellManager {
             output: "",
         });
 
-        this.emit();
+        this.jobsStatusStat.runningCount++;
+
+        this.emit({
+            type: "job-started",
+            id: input.id
+        });
     }
 
     completeJob(id: string, output: string): void {
@@ -62,7 +91,13 @@ export class ShellManager {
         job.finishedAt = now;
         job.lastActivityAt = now;
 
-        this.emit();
+        this.jobsStatusStat.runningCount--;
+        this.jobsStatusStat.completedCount++;
+
+        this.emit({
+            type: "job-completed",
+            id: id
+        });
     }
 
     failJob(
@@ -79,7 +114,13 @@ export class ShellManager {
         job.finishedAt = now;
         job.lastActivityAt = now;
 
-        this.emit();
+        this.jobsStatusStat.runningCount--;
+        this.jobsStatusStat.failedCount++;
+
+        this.emit({
+            type: "job-failed",
+            id: id
+        });
     }
 
     stopJob(id: string, error: string): void {
@@ -91,12 +132,26 @@ export class ShellManager {
         job.finishedAt = now;
         job.lastActivityAt = now;
 
-        this.emit();
+        this.jobsStatusStat.runningCount--;
+        this.jobsStatusStat.stoppedCount++;
+
+        this.emit({
+            type: "job-stopped",
+            id: id
+        });
     }
 
     clearAllJobs(): void {
         this.jobs.clear();
-        this.emit();
+
+        this.jobsStatusStat.runningCount = 0;
+        this.jobsStatusStat.completedCount = 0;
+        this.jobsStatusStat.failedCount = 0;
+        this.jobsStatusStat.stoppedCount = 0;
+
+        this.emit({
+            type: "jobs-cleared"
+        });
     };
 
     updateOutput(id: string, output: string): void {
@@ -113,7 +168,10 @@ export class ShellManager {
         job.output = output;
         job.lastActivityAt = Date.now();
 
-        this.emit();
+        this.emit({
+            type: "output-updated",
+            id: id
+        });
     }
 
     getJob(id: string): Readonly<ShellJob> | undefined {
@@ -129,6 +187,21 @@ export class ShellManager {
         return Array.from(this.jobs.values()).filter(
             (job) => job.status === "running",
         );
+    }
+
+    getCompletedJobsList(): readonly Readonly<ShellJob>[] {
+        return Array.from(this.jobs.values()).filter(
+            (job) => job.status === "completed",
+        );
+    }
+
+    getAllJobsStatusStat(): JobsStatusStat {
+        return {
+            runningCount: this.jobsStatusStat.runningCount,
+            completedCount: this.jobsStatusStat.completedCount,
+            failedCount: this.jobsStatusStat.failedCount,
+            stoppedCount: this.jobsStatusStat.stoppedCount,
+        };
     }
 
     subscribe(listener: ShellManagerListener): () => void {
@@ -161,9 +234,9 @@ export class ShellManager {
         return job;
     }
 
-    private emit(): void {
+    private emit(event: ShellManagerEvent): void {
         for (const listener of this.listeners) {
-            listener();
+            listener(event);
         }
     }
 }
