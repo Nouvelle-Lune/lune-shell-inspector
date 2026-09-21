@@ -24,3 +24,8 @@ dist/
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# scratch files
+.scratch/
+
+AGENT.md
