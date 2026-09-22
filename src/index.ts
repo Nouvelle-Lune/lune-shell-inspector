@@ -4,12 +4,15 @@
  * The extension re-registers the tool under the same name, so pi uses this definition instead of the
  * built-in one. `mode: "foreground"` (the default) delegates the call to the built-in bash tool
  * unchanged; `mode: "background"` starts a managed shell job whose execution continues after the
- * call returned and is reported by the shell dock. No renderers are supplied on purpose - pi merges
- * the built-in renderers by tool name (see `withBuiltInRenderers`), so the row keeps its standard
- * `$ <command>` look and this definition cannot drift from it.
+ * call returned and is reported by the shell dock. pi's `withBuiltInRenderers` only fills renderers
+ * a definition does not supply, so the wrapper ships its own: a foreground row delegates to the
+ * built-in bash renderers (keeping the standard `$ <command>` look and never drifting from it),
+ * while a background row renders empty because the detached job is reported by the shell dock and
+ * the `/shell` inspector, not by a transcript row that could never stream the output.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createBashTool } from "@earendil-works/pi-coding-agent";
+import { createBashTool, createBashToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Container } from "@earendil-works/pi-tui";
 
 import Type from "typebox";
 
@@ -57,7 +60,7 @@ export default function (pi: ExtensionAPI): void {
 
     // Reuse the built-in definition and extend its schema with `mode`, so the rest of the tool
     // contract the model sees cannot drift from the built-in one.
-    const baseBash = createBashTool(process.cwd());
+    const baseBash = createBashToolDefinition(process.cwd());
 
     const parameters = Type.Object({
         ...baseBash.parameters.properties,
@@ -78,6 +81,20 @@ export default function (pi: ExtensionAPI): void {
     pi.registerTool({
         ...baseBash,
         parameters,
+
+        renderCall(args, theme, context) {
+            if ((args.mode ?? "foreground") === "background") {
+                return new Container();
+            }
+            return baseBash.renderCall!(args, theme, context);
+        },
+
+        renderResult(result, options, theme, context) {
+            if ((context.args.mode ?? "foreground") === "background") {
+                return new Container();
+            }
+            return baseBash.renderResult!(result as Parameters<NonNullable<typeof baseBash.renderResult>>[0], options, theme, context);
+        },
 
         async execute(toolCallId, params, signal, onUpdate, ctx) {
             // Foreground is the default: delegate the call unchanged. The dock only tracks

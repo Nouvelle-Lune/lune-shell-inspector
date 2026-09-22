@@ -5,9 +5,8 @@
  * pi-ai's official `fauxProvider()` and queues exactly two responses: one `bash` tool call that runs
  * a long-running fixture script, and one line of closing text. Nothing is mocked below the model:
  * the call travels through pi's real agent loop, the built-in bash tool really executes the script,
- * and the `bash` tool re-registered by `src/index.ts` either delegates the call (foreground) or
- * starts a managed shell job (background), so pi keeps drawing the row with its built-in bash
- * renderers.
+ * and the `bash` tool re-registered by `src/index.ts` either delegates the call (foreground, drawn
+ * with pi's built-in bash renderers) or starts a managed shell job (background, no transcript row).
  *
  * Selection (all optional, no silent fallback):
  * - `PI_SHELL_VIEW_COMMAND` replaces the command outright, for ad-hoc observation of any long task.

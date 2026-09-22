@@ -18,14 +18,14 @@
  *   (`setExtensionWidget`: placement buckets, key replacement, reinsertion moves a key to the end),
  *   and whose `ui.theme.fg` records every colour request while returning the text unstyled;
  * - real command execution through the delegated implementation.
- * Renderers and the TUI itself are not simulated; the real TUI is observed through
- * `test/tui`.
+ * Renderers are called directly by the registration tests, which pin the delegation contract; the
+ * TUI itself is not simulated, and the real TUI is observed through `test/tui`.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createBashTool } from "@earendil-works/pi-coding-agent";
+import { createBashTool, createBashToolDefinition } from "@earendil-works/pi-coding-agent";
 import type {
     AgentToolResult,
     AgentToolUpdateCallback,
@@ -351,6 +351,16 @@ export function loadBashTool(cwd: string): BashToolDefinition {
  */
 export function createBuiltInBash(cwd: string): BashToolDefinition {
     return createBashTool(cwd) as unknown as BashToolDefinition;
+}
+
+/**
+ * The built-in bash tool *definition* the extension's foreground renderers delegate to.
+ *
+ * `createBashTool(cwd)` returns the AgentTool form, which carries no renderers; the registration
+ * tests need the definition form to compare the wrapper's foreground rows with the built-in ones.
+ */
+export function createBuiltInBashDefinition(cwd: string): BashToolDefinition {
+    return createBashToolDefinition(cwd) as unknown as BashToolDefinition;
 }
 
 /** A loaded extension plus the session it was started in. */

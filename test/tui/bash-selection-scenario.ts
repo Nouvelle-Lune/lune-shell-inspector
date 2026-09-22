@@ -7,9 +7,9 @@
  * 1. a quick command whose result the turn needs to continue: `mode` is omitted (foreground), so
  *    the call is delegated to pi's built-in bash tool - the row streams and settles like a plain
  *    bash call, and no shell job appears anywhere;
- * 2. a long-running command that may continue independently: `mode: "background"`, so the row
- *    settles at once with `Background shell started ...`, and the shell dock plus the `/shell`
- *    inspector show the job while it streams;
+ * 2. a long-running command that may continue independently: `mode: "background"`, so the call
+ *    leaves no transcript row and the shell dock plus the `/shell` inspector show the job while it
+ *    streams;
  * 3. the closing text arrives after the background shell settled, so the inspector can also be
  *    inspected in its settled state.
  *

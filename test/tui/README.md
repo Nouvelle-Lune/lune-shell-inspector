@@ -9,7 +9,7 @@ pi session, driven by a scripted model. Nothing is asserted here - the human wat
 | session | pi itself: interactive TUI, agent loop, tool-result plumbing | the model: pi-ai's `fauxProvider()`, answering from this directory's scripts |
 | extension | `src/index.ts` loaded with `-e`: delegates foreground calls, starts background jobs | — |
 | execution | pi's built-in `bash` tool spawns and streams the fixture command (or the local bash operations stream into a shell job) | — |
-| rendering | pi's own TUI and built-in bash renderers, merged by tool name (the extension ships none) | — |
+| rendering | pi's own TUI; the wrapper delegates foreground rows to the built-in bash renderers and draws background rows empty | — |
 | network | nothing: `--offline`, no API key, no provider request | — |
 
 ## Scenarios
@@ -97,10 +97,11 @@ The scripted model picks the mode, so one run shows both paths in order:
    *without* a mode: the `$ <command>` row streams and settles like a plain bash call and the
    extension records nothing (no dock line, no `/shell` job).
 2. turn 2 - the model decides the long fixture may continue on its own and sends
-   `mode: "background"`: the row settles at once with `Background shell started <tool-call-id>:
-   <command>`, the dock appears with `1 running shell · <command> · <Ns> · /shell to open` and the
-   seconds ticking, and `/shell` shows the same job while its output pane grows. Open `/shell` here
-   and follow the pane at the tail (or `⇧↑` to pause it).
+   `mode: "background"`: the call leaves no transcript row at all (the tool answered before the
+   command ran, and the job streams only into the dock), the dock appears with
+   `1 running shell · <command> · <Ns> · /shell to open` and the seconds ticking, and `/shell` shows
+   the same job while its output pane grows. Open `/shell` here and follow the pane at the tail
+   (or `⇧↑` to pause it).
 3. the closing text arrives after the shell settled, so the dock turns into
    `1 shell completed in <Ns> · /shell to open` and `/shell` still lists the finished job with its
    complete output.
@@ -128,8 +129,9 @@ Foreground is the default path, so nearly everything on screen is pi:
 
 With `PI_SHELL_VIEW_MODE=background` the same fixture becomes a managed shell job:
 
-1. `Background shell started <tool-call-id>: <command>` - the row settles immediately, because the
-   tool returned before the command finished; pi draws it with the built-in result renderer.
+1. no transcript row - the call settles immediately (the tool answered before the command
+   finished) and the wrapper draws both the call and its result as empty, because the job is
+   reported by the dock and `/shell` instead.
 2. `1 running shell · <command> · <Ns> · /shell to open` - the shell dock below the editor, mounted
    under widget key `pi-shell-view` with `placement: "belowEditor"`, with the seconds ticking while
    the command runs.
@@ -196,7 +198,7 @@ scenario and opens the inspector on the background shell while it streams:
   | timeout 40 script -q /tmp/pisv-tui-selection-inspector.log npm run tui:demo >/dev/null 2>&1
 ```
 
-Look for the foreground row settling first, then `Background shell started ...`, the
+Look for the foreground row settling first, then no row at all for the background call, the
 `1 running shell · ... · /shell to open` dock line, and the inspector frame with the growing output
 pane (`Output · <N> lines · running`). The keystroke recipe below is the shelldocksum variant that
 pauses and scrolls the `long-output` pane:

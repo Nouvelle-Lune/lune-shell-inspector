@@ -4,9 +4,9 @@
  * Starts the real `pi` binary in interactive mode, loading this directory's scripted provider plus
  * the repository's `src/index.ts`. A deterministic faux model then asks for bash tool calls, which
  * pi's built-in bash tool executes for real: the extension either delegates a foreground call
- * unchanged and pi draws and streams the row with its built-in bash renderers (merged by tool name,
- * because the extension defines none), or starts a background call that returns immediately and
- * shows up in the shell dock. The child inherits stdio, so it draws into the caller's terminal (or
+ * unchanged and draws and streams the row with the built-in bash renderers, or starts a background
+ * call that returns immediately, leaves no transcript row and shows up in the shell dock. The child
+ * inherits stdio, so it draws into the caller's terminal (or
  * into the pty created by `script`), and its exit code is forwarded unchanged.
  *
  * Four scenarios exist:
@@ -94,10 +94,10 @@ What to watch for in the selection scenario (default):
    sends the call without a mode, so the "$ <command>" row streams and settles like a plain bash
    call and no dock entry or /shell job appears.
 2. turn 2 is the background case - the model decides the long fixture can continue on its own and
-   sends mode: "background", so the row settles at once with "Background shell started <id>:
-   <command>", the dock shows "1 running shell · <command> · <Ns> · /shell to open" with the seconds
-   ticking, and /shell shows the same job with its output pane growing while it streams. Press
-   /shell here to scroll the pane (⇧↑/⇧↓, Home/End) while the shell runs.
+   sends mode: "background", so the call leaves no transcript row (the wrapper draws it empty), the
+   dock shows "1 running shell · <command> · <Ns> · /shell to open" with the seconds ticking, and
+   /shell shows the same job with its output pane growing while it streams. Press /shell here to
+   scroll the pane (⇧↑/⇧↓, Home/End) while the shell runs.
 3. the closing text arrives after the shell settled, so the dock turns into
    "1 shell completed in <Ns> · /shell to open" and /shell still shows the finished job.
 
@@ -107,9 +107,9 @@ PI_SHELL_VIEW_COMMAND and PI_SHELL_VIEW_TIMEOUT change what runs in the backgrou
 What to watch for in a fixture run ("npm run tui:demo -- <id>" or PI_SHELL_VIEW_FIXTURE=<id>):
 foreground (the default) draws the "$ <command>" row pi streams and settles - success, truncation
 warning or the failure text for a failing fixture - with no dock entry. With
-PI_SHELL_VIEW_MODE=background the same fixture runs as a managed shell job instead: the row settles
-immediately with "Background shell started <id>: <command>", the dock reports it, and /shell shows
-the job. A non-zero exit is a completed job carrying its exit code; a timeout fails the job.
+PI_SHELL_VIEW_MODE=background the same fixture runs as a managed shell job instead: the transcript
+row stays empty, the dock reports the job, and /shell shows it. A non-zero exit is a completed job
+carrying its exit code; a timeout fails the job.
 
 What to watch for in the shelldocksum scenario: the dock below the editor walks through its summary
 shapes without any keyboard input - "1 running shell · <command> · <Ns> · /shell to open" with the

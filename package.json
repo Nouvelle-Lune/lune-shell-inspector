@@ -1,15 +1,22 @@
 {
   "name": "pi-shell-view",
   "version": "1.0.0",
-  "description": "",
+  "description": "Shell dock and /shell inspector for pi's background bash jobs",
   "type": "module",
-  "main": "index.ts",
+  "main": "src/index.ts",
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
   "scripts": {
     "test": "node --experimental-strip-types --test 'test/**/*.test.ts'",
     "typecheck": "tsc --noEmit",
     "tui:demo": "node --experimental-strip-types test/tui/launch.ts"
   },
-  "keywords": [],
+  "keywords": [
+    "pi-package"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {

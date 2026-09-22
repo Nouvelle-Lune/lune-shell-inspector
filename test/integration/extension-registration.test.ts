@@ -4,24 +4,66 @@
  * The extension replaces pi's built-in `bash` tool by registering another definition under the same
  * name. These tests assert what pi receives at load time: exactly one tool, the built-in metadata
  * (description, prompt snippet/guidelines, constrained sampling) plus the wrapper's own optional
- * `mode` parameter, and no renderers of its own (pi merges the built-in bash renderers by tool
- * name, see `withBuiltInRenderers`). Execution behaviour is covered by
+ * `mode` parameter, and the renderer contract - pi's `withBuiltInRenderers` only fills renderers a
+ * definition does not supply, so the wrapper supplies its own: foreground rows delegate to the
+ * built-in bash renderers, background rows render empty. Execution behaviour is covered by
  * `test/integration/bash-delegation.test.ts` (foreground) and
  * `test/integration/background-bash.test.ts` (background mode).
  */
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
 
 import {
     createBuiltInBash,
+    createBuiltInBashDefinition,
     createTempWorkDir,
     registerExtension,
     removeTempWorkDir,
     type BashToolDefinition,
 } from "../harness.ts";
+
+/** Width the renderer rows are measured at; wide enough that the built-in `$ <command>` row never wraps. */
+const RENDER_WIDTH = 120;
+
+/**
+ * Theme argument handed to the renderers.
+ *
+ * The built-in shell renderers colour through pi's module-level theme (initialized by `initTheme`)
+ * and ignore this argument, so a stand-in is enough to compare the wrapper's delegation with the
+ * built-in renderers without re-implementing styling.
+ */
+const theme = {} as Theme;
+
+/** Renderer context type pi passes to a definition's renderers; the package does not export it. */
+type RenderContext = Parameters<NonNullable<BashToolDefinition["renderCall"]>>[2];
+
+/** Renderer context of one tool row, with execution not started so the built-in renderers stay timer-free. */
+function createRenderContext(args: Record<string, unknown>, workDir: string): RenderContext {
+    return {
+        args,
+        toolCallId: "call-render",
+        invalidate: () => { },
+        lastComponent: undefined,
+        state: { startedAt: undefined, endedAt: undefined, interval: undefined },
+        cwd: workDir,
+        executionStarted: false,
+        argsComplete: true,
+        isPartial: false,
+        expanded: false,
+        showImages: false,
+        isError: false,
+    };
+}
+
+/** Join rendered lines and drop SGR sequences, so content assertions survive any palette. */
+function plainText(lines: readonly string[]): string {
+    return lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+}
 
 describe("pi-shell-view registration", () => {
     let workDir: string;
@@ -29,6 +71,8 @@ describe("pi-shell-view registration", () => {
 
     before(() => {
         workDir = createTempWorkDir("registration");
+        // The built-in shell renderers resolve their colours from pi's module-level theme.
+        initTheme();
         const host = registerExtension(workDir);
         const registeredTool = host.registeredTools.find((entry) => entry.name === "bash");
         assert.ok(registeredTool, "expected the extension to register a bash tool");
@@ -66,11 +110,79 @@ describe("pi-shell-view registration", () => {
         );
     });
 
-    it("ships no renderers so pi keeps drawing the row with its built-in bash renderers", () => {
-        // Contract: the definition carries no renderCall/renderResult of its own, so pi's
-        // withBuiltInRenderers() merge applies and the row keeps the standard "$ <command>" look.
-        assert.equal(tool.renderCall, undefined, "a custom renderCall would replace pi's built-in bash call renderer");
-        assert.equal(tool.renderResult, undefined, "a custom renderResult would replace pi's built-in bash result renderer");
+    it("delegates foreground rows to the built-in bash renderers", () => {
+        // Contract: pi's withBuiltInRenderers() only fills renderers the definition does not
+        // supply, so shipping a renderer without delegating would silently replace the built-in
+        // "$ <command>" row. A foreground call - mode omitted or explicit - must render exactly the
+        // built-in call and result rows.
+        const builtIn = createBuiltInBashDefinition(workDir);
+        const result = {
+            content: [{ type: "text" as const, text: "hello\n" }],
+            details: undefined,
+        };
+        const options = { expanded: false, isPartial: false };
+
+        const foregroundArgs: Record<string, unknown>[] = [
+            { command: "echo hello" },
+            { command: "echo hello", mode: "foreground" },
+        ];
+        for (const args of foregroundArgs) {
+            const call = tool.renderCall!(args, theme, createRenderContext(args, workDir));
+            const builtInCall = builtIn.renderCall!(args, theme, createRenderContext(args, workDir));
+            assert.deepEqual(
+                call.render(RENDER_WIDTH),
+                builtInCall.render(RENDER_WIDTH),
+                `mode ${JSON.stringify(args.mode)} must keep the built-in call row`,
+            );
+            assert.match(
+                plainText(builtInCall.render(RENDER_WIDTH)),
+                /\$ echo hello/,
+                "guard: the built-in bash row must be the consulted reference",
+            );
+
+            const resultRow = tool.renderResult!(result, options, theme, createRenderContext(args, workDir));
+            const builtInResultRow = builtIn.renderResult!(result, options, theme, createRenderContext(args, workDir));
+            assert.deepEqual(
+                resultRow.render(RENDER_WIDTH),
+                builtInResultRow.render(RENDER_WIDTH),
+                `mode ${JSON.stringify(args.mode)} must keep the built-in result row`,
+            );
+            assert.match(plainText(resultRow.render(RENDER_WIDTH)), /hello/);
+        }
+    });
+
+    it("renders background rows empty so only the shell dock reports the job", () => {
+        // Contract: a background call answers before the command even runs, so a transcript row
+        // would be a dead "$ ..." placeholder that can never stream output. Both renderers must
+        // return an empty component; the running job belongs to the shell dock and /shell.
+        const args = { command: "sleep 3600", mode: "background" as const };
+        const context = createRenderContext(args, workDir);
+        assert.deepEqual(
+            tool.renderCall!(args, theme, context).render(RENDER_WIDTH),
+            [],
+            "a background call must draw no call row",
+        );
+        assert.deepEqual(
+            tool.renderResult!(
+                {
+                    content: [{ type: "text" as const, text: "Background shell started call-render: sleep 3600" }],
+                    details: undefined,
+                },
+                { expanded: false, isPartial: false },
+                theme,
+                context,
+            ).render(RENDER_WIDTH),
+            [],
+            "a background result must draw no result row",
+        );
+
+        // Guard: the built-in renderers would draw a row for the same arguments, so the empty rows
+        // come from the wrapper's suppression rather than from an empty result.
+        const builtIn = createBuiltInBashDefinition(workDir);
+        assert.notDeepEqual(
+            builtIn.renderCall!(args, theme, createRenderContext(args, workDir)).render(RENDER_WIDTH),
+            [],
+        );
     });
 
     it("extends the built-in parameter schema with an optional foreground/background mode", () => {
