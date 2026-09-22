@@ -14,7 +14,9 @@
  * - `fixture` (default): one scripted bash call, for the dock's own behaviour.
  * - `shelldocksum`: `shelldock-summary-scenario.ts` queues three bash turns that walk the dock
  *   through every summary shape (one running, one completed, mixed counts, a failure, stopped
- *   shells), so the line can be read in the real TUI.
+ *   shells), so the line can be read in the real TUI. Its first turn streams the `long-output`
+ *   fixture, whose 200 lines overflow the `/shell` inspector's pane, so the same run also verifies
+ *   the inspector's scroll keys by hand.
  * - `subagent`: `subagent-scenario.ts` registers the same faux provider plus an offline probe agent,
  *   and its first scripted turn asks for a bash call and a foreground subagent call at once. pi
  *   runs sibling tool calls concurrently, so the shell dock and pi-subagents' own below-editor
@@ -83,6 +85,14 @@ list ("3 shells · 2 running · 1 completed · /shell to open" ... "3 shells · 
 1 completed · 1 failed · /shell to open"), and finally "5 shells · 2 running ·
 2 completed · 1 failed · /shell to open". Pressing Esc while the last two
 sleeps run aborts them and the settled line reports the stopped shells.
+
+The first turn is the inspector's scroll demo: the long-output fixture streams 200 lines, notifies
+"press /shell to scroll this output (⇧↑/⇧↓, Home/End)" when it starts, and its output is longer than
+the inspector's pane on any terminal. Press /shell while it runs to watch the pane follow the newest
+line, then scroll back with Shift+Up/Shift+K, forward with Shift+Down/Shift+J and jump with Home/End:
+the Output header shows "paused ↑N" while the newest line is out of view and drops it again once the
+pane is back at the tail. The job stays in the list after it completes, so the same scrolling can be
+checked on a settled shell.
 
 What to watch for in the subagent scenario: the shell dock line "1 running shell · <command> ·
 <Ns> · /shell to open" below the editor while the subagent runs, pi-subagents' own widget next to it,

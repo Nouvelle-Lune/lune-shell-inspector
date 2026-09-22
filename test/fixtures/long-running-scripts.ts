@@ -107,6 +107,22 @@ export const LONG_RUNNING_FIXTURES: LongRunningFixture[] = [
         },
     },
     {
+        id: "long-output",
+        title: "Two hundred numbered lines, four every 120ms (overflows the shell inspector's pane)",
+        scriptPath: scriptPath("long-output.sh"),
+        command: scriptCommand("long-output.sh"),
+        expectations: {
+            fails: false,
+            truncated: false,
+            outputIncludes: ["[long]", "line 200 of 200"],
+            errorIncludes: [],
+            fullOutputIncludes: [],
+            minLines: 200,
+            minDurationMs: 5000,
+            maxDurationMs: 15000,
+        },
+    },
+    {
         id: "failing",
         title: "Stdout lines followed by stderr lines and exit code 3",
         scriptPath: scriptPath("failing.sh"),

@@ -229,7 +229,7 @@ describe("shell dock", () => {
 
             render();
 
-            assert.equal(line(), "1 shells · 1 failed · /shell to open");
+            assert.equal(line(), "1 shell · 1 failed · /shell to open");
         });
 
         it("uses the count list for a single stopped shell", () => {
@@ -237,7 +237,7 @@ describe("shell dock", () => {
 
             render();
 
-            assert.equal(line(), "1 shells · 1 stopped · /shell to open");
+            assert.equal(line(), "1 shell · 1 stopped · /shell to open");
         });
 
         it("re-mounts the same key with updated content on every render", () => {

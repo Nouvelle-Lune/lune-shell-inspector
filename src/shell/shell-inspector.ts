@@ -76,6 +76,16 @@ export class ShellInspector implements Component {
     private unsubscribeJobs: (() => void) | undefined;
     private refreshTimer: ReturnType<typeof setInterval> | undefined;
 
+    /**
+     * First visible output line; undefined follows the newest output.
+     *
+     * An absolute anchor (not an offset from the tail) is what makes scrolling a pause: with a
+     * tail-relative offset, streamed lines would drag the viewport along while the user reads.
+     */
+    private outputAnchor: number | undefined;
+    /** Output rows the last render could show; key handling needs it to clamp the anchor. */
+    private outputRows = 0;
+
     constructor(
         ctx: ExtensionContext,
         requestRender: () => void,
@@ -110,6 +120,29 @@ export class ShellInspector implements Component {
             return;
         }
 
+        if (matchesKey(data, Key.home)) {
+            this.jumpToOldestLine();
+            return;
+        }
+
+        if (matchesKey(data, Key.end)) {
+            this.followNewestLine();
+            return;
+        }
+
+        const scrollStep = matchesKey(data, Key.shift("up")) ||
+                matchesKey(data, Key.shift("k"))
+            ? -1
+            : matchesKey(data, Key.shift("down")) ||
+                    matchesKey(data, Key.shift("j"))
+                ? 1
+                : 0;
+
+        if (scrollStep !== 0) {
+            this.scrollOutput(scrollStep);
+            return;
+        }
+
         const step = matchesKey(data, Key.down) || data === "j"
             ? 1
             : matchesKey(data, Key.up) || data === "k"
@@ -130,6 +163,9 @@ export class ShellInspector implements Component {
         }
 
         this.selectedIndex = next;
+
+        // A different job has a different output; reading it from the middle would be confusing.
+        this.outputAnchor = undefined;
 
         this.requestRender();
     }
@@ -292,7 +328,10 @@ export class ShellInspector implements Component {
 
     private renderFooter(width: number): string {
         return this.cell(
-            this.theme.fg("dim", "↑/k/↓/j shell · Esc close"),
+            this.theme.fg(
+                "dim",
+                "↑/k/↓/j shell · ⇧↑/⇧↓ scroll · Home/End · Esc close",
+            ),
             width,
         );
     }
@@ -409,21 +448,34 @@ export class ShellInspector implements Component {
 
         const output = jobOutputLines(job.output);
 
+        // The blank line and the Output header stay fixed, so the scrolling window gets what is
+        // left of the body.
+        const available = Math.max(0, bodyHeight - rows.length - 2);
+        const window = this.outputWindow(output.length, available);
+
+        const header = [
+            this.theme.bold("Output"),
+            this.theme.fg(
+                "muted",
+                ` · ${output.length} ${output.length === 1 ? "line" : "lines"}`,
+            ),
+            this.theme.fg("muted", " · "),
+            this.theme.fg(color, job.status),
+        ];
+
+        if (window.newestHidden > 0) {
+            header.push(
+                this.theme.fg(
+                    "warning",
+                    ` · paused ↑${window.newestHidden}`,
+                ),
+            );
+        }
+
         rows.push(
             this.cell("", width),
-            this.cell(
-                this.theme.bold("Output") +
-                this.theme.fg(
-                    "muted",
-                    ` · ${output.length} ${output.length === 1 ? "line" : "lines"}`,
-                ) +
-                this.theme.fg("muted", " · ") +
-                this.theme.fg(color, job.status),
-                width,
-            ),
+            this.cell(header.join(""), width),
         );
-
-        const available = bodyHeight - rows.length;
 
         if (output.length === 0) {
             rows.push(
@@ -438,15 +490,18 @@ export class ShellInspector implements Component {
                     width,
                 ),
             );
-        } else if (available > 0) {
-            const tail = output.slice(-available);
+        } else if (window.count > 0) {
+            const visible = output.slice(
+                window.start,
+                window.start + window.count,
+            );
 
-            for (const [index, line] of tail.entries()) {
+            for (const [index, line] of visible.entries()) {
                 rows.push(
                     this.cell(
                         this.theme.fg(
                             "dim",
-                            index === tail.length - 1 ? "└─ " : "├─ ",
+                            index === visible.length - 1 ? "└─ " : "├─ ",
                         ) +
                         truncateToWidth(line, contentWidth - 3, "…"),
                         width,
@@ -456,6 +511,82 @@ export class ShellInspector implements Component {
         }
 
         return this.fill(rows, width, bodyHeight);
+    }
+
+    /**
+     * Moves the output pane by one line, entering pause mode from the tail and leaving it again
+     * once the newest line is back in view.
+     */
+    private scrollOutput(step: number): void {
+        const job = this.selectedJob();
+
+        if (!job || this.outputRows === 0) {
+            return;
+        }
+
+        const lineCount = jobOutputLines(job.output).length;
+        const tailStart = Math.max(0, lineCount - this.outputRows);
+
+        if (this.outputAnchor === undefined) {
+            if (step > 0) {
+                return;
+            }
+
+            this.outputAnchor = Math.max(0, tailStart - 1);
+        } else {
+            this.outputAnchor = Math.min(
+                tailStart,
+                Math.max(0, this.outputAnchor + step),
+            );
+        }
+
+        if (this.outputAnchor >= tailStart) {
+            this.outputAnchor = undefined;
+        }
+
+        this.requestRender();
+    }
+
+    private jumpToOldestLine(): void {
+        this.outputAnchor = 0;
+
+        this.requestRender();
+    }
+
+    private followNewestLine(): void {
+        this.outputAnchor = undefined;
+
+        this.requestRender();
+    }
+
+    private selectedJob(): Readonly<ShellJob> | undefined {
+        return shellManager.getAllJobsList()[this.selectedIndex];
+    }
+
+    /**
+     * Visible slice of the output, clamped to what the body can show. The clamped anchor is stored
+     * back so the position stays valid when the output shrinks or the pane is resized.
+     */
+    private outputWindow(
+        lineCount: number,
+        available: number,
+    ): { start: number; count: number; newestHidden: number } {
+        this.outputRows = available;
+
+        const tailStart = Math.max(0, lineCount - available);
+
+        const start = this.outputAnchor === undefined
+            ? tailStart
+            : Math.min(this.outputAnchor, tailStart);
+
+        // Landing on the newest line means following it again.
+        this.outputAnchor = start >= tailStart ? undefined : start;
+
+        return {
+            start,
+            count: Math.min(available, lineCount - start),
+            newestHidden: Math.max(0, lineCount - (start + available)),
+        };
     }
 
     private syncRefreshTimer(): void {

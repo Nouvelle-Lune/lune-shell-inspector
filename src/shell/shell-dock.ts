@@ -109,7 +109,8 @@ function shellDockSummary(ctx: ExtensionContext): string {
     }
 
     const parts: string[] = [];
-    parts.push(`${shellManager.getAllJobsList().length} shells`);
+    const jobCount = shellManager.getAllJobsList().length;
+    parts.push(`${jobCount} ${jobCount === 1 ? "shell" : "shells"}`);
 
     if (status.runningCount > 0) {
         parts.push(ctx.ui.theme.fg("accent", `${status.runningCount} running`));
