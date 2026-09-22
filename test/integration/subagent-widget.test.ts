@@ -8,9 +8,11 @@
  * it only ever touches its own key, keeps rendering while another extension's widgets are mounted,
  * and clearing it (no jobs left, session shutdown) removes nothing but itself.
  *
- * The fake UI models pi's registry, so these assertions describe what the extension asks pi to
- * mount. Whether the composed area then *looks* right is a TUI question, observed through
- * `test/tui` and the subagent scenario documented in `test/tui/README.md`.
+ * The dock is fed the way the extension feeds it in practice: background `bash` calls
+ * (`mode: "background"`) create the jobs. The fake UI models pi's registry, so these assertions
+ * describe what the extension asks pi to mount. Whether the composed area then *looks* right is a
+ * TUI question, observed through `test/tui` and the subagent scenario documented in
+ * `test/tui/README.md`.
  */
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
@@ -23,7 +25,8 @@ import {
     createTempWorkDir,
     openSession,
     removeTempWorkDir,
-    runBashCommand,
+    startBackgroundBashCommand,
+    waitForJobSettled,
     type ExtensionSession,
     type FakeExtensionUi,
     type WidgetContent,
@@ -35,6 +38,11 @@ const SH_DOCK_KEY = "pi-shell-view";
 /** Widget keys pi-subagents uses for the async job list and the inline fleet surface. */
 const SUBAGENT_ASYNC_KEY = "subagent-async";
 const SUBAGENT_FLEET_KEY = "subagent-fleet-status";
+
+/** Start a shell job directly in the manager, the way the background runner does. */
+function startJob(id: string, command: string, cwd: string): void {
+    shellManager.startJob({ id, command, cwd, controller: new AbortController() });
+}
 
 /** One mounted pi-subagents widget: the real ones are component factories, not line arrays. */
 function subagentWidget(label: string): WidgetContent {
@@ -90,13 +98,13 @@ describe("shell dock next to pi-subagents widgets", () => {
             session.ui.setWidget(SUBAGENT_ASYNC_KEY, asyncWidget, { placement: "belowEditor" });
             const extensionCallBaseline = session.ui.widgetCalls.length;
 
-            const run = await runBashCommand(session.tool, {
+            const { jobId } = await startBackgroundBashCommand(session.tool, {
                 command: "sleep 0.5; printf 'done\\n'",
                 ctx: session.ctx,
                 toolCallId: "call-with-subagent",
             });
+            await waitForJobSettled(jobId);
 
-            assert.equal(run.failed, false, `expected the command to succeed: ${run.error?.message ?? ""}`);
             assert.match(dockText(session.ui) ?? "", /^1 shell completed in \d+s · \/shell to open$/);
 
             assert.equal(
@@ -117,8 +125,9 @@ describe("shell dock next to pi-subagents widgets", () => {
     });
 
     it("keeps the dock rendered and updated across the whole command", async () => {
-        // Contract: a command streams many snapshots, so the dock is re-mounted repeatedly. Every
-        // re-mount must target the dock key only, and the subagent widgets must survive all of them.
+        // Contract: a background command appends many chunks, so the dock is re-mounted repeatedly.
+        // Every re-mount must target the dock key only, and the subagent widgets must survive all of
+        // them.
         const workDir = createTempWorkDir("subagent-stream");
         const session = await openSession(workDir);
         try {
@@ -126,15 +135,18 @@ describe("shell dock next to pi-subagents widgets", () => {
             session.ui.setWidget(SUBAGENT_FLEET_KEY, fleetWidget, { placement: "belowEditor" });
             const extensionCallBaseline = session.ui.widgetCalls.length;
 
-            const run = await runBashCommand(session.tool, {
+            const { jobId } = await startBackgroundBashCommand(session.tool, {
                 command: "for n in 1 2 3 4 5; do printf 'line %s\\n' \"$n\"; sleep 0.2; done",
                 ctx: session.ctx,
                 toolCallId: "call-stream-with-subagent",
             });
+            const settled = await waitForJobSettled(jobId);
 
-            assert.equal(run.failed, false, `expected the command to succeed: ${run.error?.message ?? ""}`);
-            assert.ok(run.updates.length > 1, "expected several streamed snapshots");
-            assert.ok(session.ui.widgetCalls.length > 2, "expected a re-render per mutation");
+            assert.equal(settled.output, "line 1\nline 2\nline 3\nline 4\nline 5\n");
+            assert.ok(
+                session.ui.widgetCalls.length - extensionCallBaseline > 2,
+                "expected a re-render per appended chunk",
+            );
             assert.equal(
                 session.ui.mountedWidget("belowEditor", SUBAGENT_FLEET_KEY),
                 fleetWidget,
@@ -156,7 +168,7 @@ describe("shell dock next to pi-subagents widgets", () => {
         const session = await openSession(workDir);
         try {
             for (let index = 0; index < 12; index += 1) {
-                shellManager.startJob({ id: `job-${index}`, command: `sleep ${index}`, cwd: workDir });
+                startJob(`job-${index}`, `sleep ${index}`, workDir);
             }
 
             const content = session.ui.mountedWidget("belowEditor", SH_DOCK_KEY);
@@ -180,13 +192,13 @@ describe("shell dock next to pi-subagents widgets", () => {
             const fleetWidget = subagentWidget("subagent fleet · 1 running");
             session.ui.setWidget(SUBAGENT_FLEET_KEY, fleetWidget, { placement: "belowEditor" });
 
-            shellManager.startJob({ id: "job-1", command: "sleep 30", cwd: workDir });
+            startJob("job-1", "sleep 30", workDir);
             assert.deepEqual(session.ui.mountedKeys("belowEditor"), [SUBAGENT_FLEET_KEY, SH_DOCK_KEY]);
 
             session.ui.setWidget(SUBAGENT_FLEET_KEY, fleetWidget, { placement: "belowEditor" });
             assert.deepEqual(session.ui.mountedKeys("belowEditor"), [SH_DOCK_KEY, SUBAGENT_FLEET_KEY], "the fleet refresh moved it after the dock");
 
-            shellManager.completeJob("job-1", "done");
+            shellManager.settleJob("job-1", { type: "completed", exitCode: 0 });
             assert.deepEqual(
                 session.ui.mountedKeys("belowEditor"),
                 [SUBAGENT_FLEET_KEY, SH_DOCK_KEY],
@@ -208,7 +220,7 @@ describe("shell dock next to pi-subagents widgets", () => {
             const fleetWidget = subagentWidget("subagent fleet · 1 running");
             session.ui.setWidget(SUBAGENT_FLEET_KEY, fleetWidget, { placement: "belowEditor" });
 
-            shellManager.startJob({ id: "job-1", command: "sleep 30", cwd: workDir });
+            startJob("job-1", "sleep 30", workDir);
             assert.ok(dockLine(session.ui));
 
             shellManager.clearAllJobs();
@@ -231,7 +243,7 @@ describe("shell dock next to pi-subagents widgets", () => {
         try {
             const fleetWidget = subagentWidget("subagent fleet · 1 running");
             session.ui.setWidget(SUBAGENT_FLEET_KEY, fleetWidget, { placement: "belowEditor" });
-            shellManager.startJob({ id: "job-1", command: "sleep 30", cwd: workDir });
+            startJob("job-1", "sleep 30", workDir);
             assert.ok(dockLine(session.ui));
             const extensionCallBaseline = session.ui.widgetCalls.length;
 
@@ -268,7 +280,7 @@ describe("shell dock next to pi-subagents widgets", () => {
         const workDir = createTempWorkDir("subagent-mid-command");
         const session = await openSession(workDir);
         try {
-            const command = runBashCommand(session.tool, {
+            const { jobId } = await startBackgroundBashCommand(session.tool, {
                 command: "for n in 1 2 3 4; do echo x; sleep 0.25; done",
                 ctx: session.ctx,
                 toolCallId: "call-subagent-starts",
@@ -280,7 +292,7 @@ describe("shell dock next to pi-subagents widgets", () => {
             session.ui.setWidget(SUBAGENT_FLEET_KEY, fleetWidget, { placement: "belowEditor" });
             const extensionCallBaseline = session.ui.widgetCalls.length;
 
-            await command;
+            await waitForJobSettled(jobId);
 
             assert.equal(session.ui.mountedWidget("belowEditor", SUBAGENT_FLEET_KEY), fleetWidget);
             assert.match(dockText(session.ui) ?? "", /^1 shell completed in \d+s · \/shell to open$/);

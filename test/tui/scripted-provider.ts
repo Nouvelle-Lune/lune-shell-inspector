@@ -5,14 +5,17 @@
  * pi-ai's official `fauxProvider()` and queues exactly two responses: one `bash` tool call that runs
  * a long-running fixture script, and one line of closing text. Nothing is mocked below the model:
  * the call travels through pi's real agent loop, the built-in bash tool really executes the script,
- * and the `bash` tool re-registered by `src/index.ts` announces the command and delegates the call,
- * so pi keeps drawing and streaming the row with its built-in bash renderers.
+ * and the `bash` tool re-registered by `src/index.ts` either delegates the call (foreground) or
+ * starts a managed shell job (background), so pi keeps drawing the row with its built-in bash
+ * renderers.
  *
  * Selection (all optional, no silent fallback):
  * - `PI_SHELL_VIEW_COMMAND` replaces the command outright, for ad-hoc observation of any long task.
  * - `PI_SHELL_VIEW_FIXTURE` picks a fixture from `test/fixtures/long-running-scripts.ts` by id
  *   (default `progress`); an unknown id throws while this extension loads.
  * - `PI_SHELL_VIEW_TIMEOUT` is forwarded to the bash tool as its timeout in seconds.
+ * - `PI_SHELL_VIEW_MODE` is `foreground` (default, row streams the output) or `background` (the call
+ *   returns immediately and the shell dock appears while the job runs).
  */
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -50,11 +53,31 @@ function scriptedTimeoutSeconds(): number | undefined {
     return seconds;
 }
 
+/**
+ * Execution mode for the scripted call.
+ *
+ * The default is foreground, so the row streams the built-in output as before; `background` makes
+ * the call a managed shell job and moves the observation to the dock and the `/shell` inspector.
+ */
+function scriptedMode(): "foreground" | "background" {
+    const raw = process.env.PI_SHELL_VIEW_MODE;
+    if (raw === undefined) {
+        return "foreground";
+    }
+    if (raw !== "foreground" && raw !== "background") {
+        throw new Error(`PI_SHELL_VIEW_MODE must be "foreground" or "background", got ${JSON.stringify(raw)}`);
+    }
+    return raw;
+}
+
 export default function (pi: ExtensionAPI): void {
     const faux = fauxProvider();
     pi.registerProvider(faux.provider);
 
-    const toolArguments: { command: string; timeout?: number } = { command: scriptedCommand() };
+    const toolArguments: { command: string; timeout?: number; mode: "foreground" | "background" } = {
+        command: scriptedCommand(),
+        mode: scriptedMode(),
+    };
     const timeout = scriptedTimeoutSeconds();
     if (timeout !== undefined) {
         toolArguments.timeout = timeout;

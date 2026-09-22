@@ -1,11 +1,15 @@
 /**
  * Shared test harness for pi-shell-view.
  *
- * The extension is a wrapper around pi's built-in `bash` tool: while loading it copies the built-in
- * description and parameter schema, and at call time it announces the command and then delegates to
- * `createBashTool(cwd)`. Around that it keeps a `ShellManager` alive: `session_start` subscribes and
- * renders the shell dock through `ctx.ui.setWidget`, every job mutation re-renders it, and
- * `session_shutdown` unsubscribes and clears it.
+ * The extension is a wrapper around pi's built-in `bash` tool with two execution paths:
+ * - foreground (the default): the call is delegated to `createBashTool(ctx.cwd)` unchanged and is
+ *   never recorded anywhere;
+ * - background (`mode: "background"`): the call returns immediately with a `Background shell
+ *   started ...` result while `startBackgroundShell` runs the command through pi's local bash
+ *   operations and records it as a `ShellManager` job (streamed output, exit code, timeout kill).
+ * Around both paths it keeps a `ShellManager` alive: `session_start` subscribes and renders the
+ * shell dock through `ctx.ui.setWidget`, every job mutation re-renders it, and `session_shutdown`
+ * unsubscribes and clears it.
  *
  * The harness reproduces only what the extension actually consumes from pi:
  * - a minimal fake host that captures registered tools and `pi.on` handlers, so a test can fire
@@ -32,14 +36,19 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import shellViewExtension from "../src/index.ts";
+import { shellManager, type ShellJob } from "../src/shell/shell-manager.ts";
 
 /** Tool definition the extension registers; the parameter schema stays opaque for the harness. */
 export type BashToolDefinition = ToolDefinition<any, any, any>;
 
-/** Arguments the built-in bash tool accepts; mirrors its TypeBox schema. */
+/** Execution mode the registered tool accepts; omitted means `foreground`. */
+export type BashMode = "foreground" | "background";
+
+/** Arguments the built-in bash tool accepts; mirrors its TypeBox schema plus the wrapper's `mode`. */
 export interface BashToolParams {
     command: string;
     timeout?: number;
+    mode?: BashMode;
 }
 
 /** Payload of one `onUpdate` callback or of the final result; `details` is the bash tool details. */
@@ -384,6 +393,8 @@ export interface BashRunOptions {
     command: string;
     /** Optional timeout in seconds, forwarded through the tool params. */
     timeout?: number;
+    /** Execution mode; omitted means the tool's own `foreground` default. */
+    mode?: BashMode;
     /** Abort signal handed to the tool; a fresh, never aborted signal by default. */
     signal?: AbortSignal;
     toolCallId?: string;
@@ -429,8 +440,13 @@ export function reportedText(run: BashRun): string {
  */
 export async function runBashCommand(tool: BashToolDefinition, options: BashRunOptions): Promise<BashRun> {
     const toolCallId = options.toolCallId ?? "call-1";
-    const params: BashToolParams =
-        options.timeout === undefined ? { command: options.command } : { command: options.command, timeout: options.timeout };
+    const params: BashToolParams = { command: options.command };
+    if (options.timeout !== undefined) {
+        params.timeout = options.timeout;
+    }
+    if (options.mode !== undefined) {
+        params.mode = options.mode;
+    }
     const ctx = options.ctx === null ? undefined : (options.ctx ?? createFakeContext(process.cwd()));
     const signal = options.signal ?? new AbortController().signal;
     const execute = tool.execute as unknown as ToolExecute;
@@ -455,4 +471,127 @@ export async function runBashCommand(tool: BashToolDefinition, options: BashRunO
     const durationMs = Date.now() - startedAt;
 
     return { toolCallId, command: options.command, updates, result, error, failed: error !== undefined, durationMs };
+}
+
+/* -------------------------------------------------------------------------------------------------
+ * Background calls
+ * ---------------------------------------------------------------------------------------------- */
+
+/** A background call that returned while its job is still owned by the shell manager. */
+export interface BackgroundBashStart {
+    /** The immediate result of the tool call, recorded like any other {@link BashRun}. */
+    run: BashRun;
+    /** Id the shell job is tracked under: the tool call id. */
+    jobId: string;
+}
+
+/**
+ * Call the registered tool with `mode: "background"` and return immediately.
+ *
+ * The tool is expected to answer right away with a `Background shell started ...` result; the
+ * command keeps running in the manager. Use {@link waitForJobSettled} or
+ * {@link runBackgroundBashCommand} to observe how the job ends.
+ */
+export function startBackgroundBashCommand(
+    tool: BashToolDefinition,
+    options: BashRunOptions,
+): Promise<BackgroundBashStart> {
+    return runBashCommand(tool, { ...options, mode: "background" }).then((run) => ({
+        run,
+        jobId: run.toolCallId,
+    }));
+}
+
+/** Default deadline for a background job to leave the `running` state. */
+export const JOB_SETTLE_TIMEOUT_MS = 15_000;
+
+/**
+ * Wait until a shell job reaches a settled status (`completed`, `failed` or `killed`).
+ *
+ * Polls through the manager's subscription rather than sleeping: the promise resolves on the job
+ * mutation that settles the job, and rejects when the deadline passes first. A job that is already
+ * settled when the wait starts resolves immediately.
+ */
+export function waitForJobSettled(
+    jobId: string,
+    timeoutMs: number = JOB_SETTLE_TIMEOUT_MS,
+): Promise<Readonly<ShellJob>> {
+    return new Promise((resolve, reject) => {
+        let unsubscribe: (() => void) | undefined;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let finished = false;
+
+        const finish = (settle: () => void): void => {
+            if (finished) {
+                return;
+            }
+            finished = true;
+            if (timer) {
+                clearTimeout(timer);
+            }
+            unsubscribe?.();
+            settle();
+        };
+
+        const settledJob = (): Readonly<ShellJob> | undefined => {
+            const job = shellManager.getJob(jobId);
+            return job && job.status !== "running" ? job : undefined;
+        };
+
+        // Subscribe before the first check so a job that settles in between is never missed.
+        unsubscribe = shellManager.subscribe(() => {
+            const job = settledJob();
+            if (job) {
+                finish(() => resolve(job));
+            }
+        });
+
+        timer = setTimeout(() => {
+            const job = shellManager.getJob(jobId);
+            finish(() =>
+                reject(
+                    new Error(
+                        `shell job ${JSON.stringify(jobId)} did not settle within ${timeoutMs}ms ` +
+                        `(status ${JSON.stringify(job?.status)}, output ${JSON.stringify(job?.output ?? "")})`,
+                    ),
+                ),
+            );
+        }, timeoutMs);
+
+        const job = settledJob();
+        if (job) {
+            finish(() => resolve(job));
+        }
+    });
+}
+
+/** Start a background call and wait for the job it created to settle. */
+export async function runBackgroundBashCommand(
+    tool: BashToolDefinition,
+    options: BashRunOptions,
+): Promise<{ run: BashRun; job: Readonly<ShellJob> }> {
+    const { run, jobId } = await startBackgroundBashCommand(tool, options);
+    const job = await waitForJobSettled(jobId);
+    return { run, job };
+}
+
+/**
+ * Poll until `predicate` holds, or fail once the deadline passes.
+ *
+ * Used by tests that observe a background job while it is still streaming: the job's output grows in
+ * chunks, so the test waits for a marker instead of sleeping for a fixed time.
+ */
+export async function waitFor(
+    description: string,
+    predicate: () => boolean,
+    timeoutMs: number = 5_000,
+): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+
+    while (!predicate()) {
+        if (Date.now() >= deadline) {
+            throw new Error(`timed out after ${timeoutMs}ms waiting for ${description}`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
 }

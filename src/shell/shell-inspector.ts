@@ -656,7 +656,7 @@ function statusColor(status: ShellJobStatus): ThemeColor {
             return "success";
         case "failed":
             return "error";
-        case "stopped":
+        case "killed":
             return "muted";
     }
 }

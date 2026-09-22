@@ -29,19 +29,19 @@ const WIDGET_KEY = "pi-shell-view";
 
 /** Start one job and settle it into `status`. */
 function addJob(id: string, command: string, status: ShellJobStatus = "running"): void {
-    shellManager.startJob({ id, command, cwd: "/work" });
+    shellManager.startJob({ id, command, cwd: "/work", controller: new AbortController() });
 
     switch (status) {
         case "running":
             return;
         case "completed":
-            shellManager.completeJob(id, "done");
+            shellManager.settleJob(id, { type: "completed", exitCode: 0 });
             return;
         case "failed":
-            shellManager.failJob(id, "Command exited with code 1", 1);
+            shellManager.settleJob(id, { type: "failed", error: "Command exited with code 1", exitCode: 1 });
             return;
-        case "stopped":
-            shellManager.stopJob(id, "Command aborted");
+        case "killed":
+            shellManager.settleJob(id, { type: "killed", error: "timeout:1" });
     }
 }
 
@@ -203,16 +203,16 @@ describe("shell dock", () => {
             assert.doesNotMatch(line(), /\d+s ·/, "the count list must not carry an elapsed time");
         });
 
-        it("reports every status in running, completed, failed, stopped order and omits empty ones", () => {
+        it("reports every status in running, completed, failed, killed order and omits empty ones", () => {
             addJob("running", "sleep 30", "running");
             addJob("completed", "echo done", "completed");
             addJob("failed", "exit 1", "failed");
-            addJob("stopped", "sleep 60", "stopped");
-            addJob("stopped-2", "sleep 60", "stopped");
+            addJob("killed", "sleep 60", "killed");
+            addJob("killed-2", "sleep 60", "killed");
 
             render();
 
-            assert.equal(line(), "5 shells · 1 running · 1 completed · 1 failed · 2 stopped · /shell to open");
+            assert.equal(line(), "5 shells · 1 running · 1 completed · 1 failed · 2 killed · /shell to open");
         });
 
         it("shows no running segment when every shell settled", () => {
@@ -232,12 +232,18 @@ describe("shell dock", () => {
             assert.equal(line(), "1 shell · 1 failed · /shell to open");
         });
 
-        it("uses the count list for a single stopped shell", () => {
-            addJob("job-1", "sleep 60", "stopped");
+        it("uses the count list for a single killed shell and marks it as an error", () => {
+            // Contract: a killed shell has no dedicated single-job format, and its count is drawn in
+            // the error colour like a failure - a killed background shell is worth noticing.
+            addJob("job-1", "sleep 60", "killed");
 
             render();
 
-            assert.equal(line(), "1 shell · 1 stopped · /shell to open");
+            assert.equal(line(), "1 shell · 1 killed · /shell to open");
+            assert.ok(
+                ui.fgCalls.some((call) => call.color === "error" && call.text === "1 killed"),
+                "the killed segment must be drawn in the error colour",
+            );
         });
 
         it("re-mounts the same key with updated content on every render", () => {
@@ -248,7 +254,7 @@ describe("shell dock", () => {
             render();
             assert.equal(line(), "2 shells · 2 running · /shell to open");
 
-            shellManager.completeJob("job-2", "done");
+            shellManager.settleJob("job-2", { type: "completed", exitCode: 0 });
             render();
 
             assert.equal(line(), "2 shells · 1 running · 1 completed · /shell to open");
@@ -319,7 +325,7 @@ describe("shell dock", () => {
                 mock.timers.tick(3_000);
                 assert.equal(line(), "1 running shell · sleep 30 · 4s · /shell to open");
 
-                shellManager.completeJob("job-1", "done");
+                shellManager.settleJob("job-1", { type: "completed", exitCode: 0 });
                 render();
                 const callsAfterSettle = ui.widgetCalls.length;
                 mock.timers.tick(5_000);

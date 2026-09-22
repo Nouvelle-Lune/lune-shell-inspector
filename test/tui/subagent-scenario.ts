@@ -3,8 +3,9 @@
  *
  * One offline session shows the shell dock and pi-subagents' own surface at the same time:
  *
- * 1. the parent's first scripted turn asks for two tool calls - a long `bash` command and a
- *    foreground `subagent` call for the probe agent registered below, so both run concurrently;
+ * 1. the parent's first scripted turn asks for two tool calls - a long background `bash` command
+ *    (`mode: "background"`, so it becomes a dock job instead of holding the turn) and a foreground
+ *    `subagent` call for the probe agent registered below, so the shell runs while the subagent does;
  * 2. the probe's scripted turns run a long `bash` command of their own and then report back;
  * 3. the parent's scripted closing line ends the fixture.
  *
@@ -14,7 +15,7 @@
  *
  * Selection (all optional, no silent fallback):
  * - `PI_SHELL_VIEW_COMMAND` replaces the parent's shell command.
- * - `PI_SHELL_VIEW_PROBE_COMMAND` replaces the probe's shell command.
+ * - `PI_SHELL_VIEW_PROBE_COMMAND` replaces the probe's shell command (foreground in the probe session).
  */
 import {
     fauxAssistantMessage,
@@ -106,11 +107,12 @@ export default function (pi: ExtensionAPI): void {
 
         parent.turns += 1;
         if (parent.turns === 1) {
-            // Two sibling tool calls: pi runs them concurrently, so the shell job and the subagent are
-            // active at the same time and both surfaces can be observed.
+            // Two sibling tool calls: the background shell returns immediately and becomes a dock job,
+            // the foreground subagent keeps running, so both below-editor surfaces are on screen at
+            // the same time.
             return fauxAssistantMessage(
                 [
-                    fauxToolCall("bash", { command: parentCommand }),
+                    fauxToolCall("bash", { command: parentCommand, mode: "background" }),
                     fauxToolCall("subagent", { agent: PROBE_AGENT_NAME, task: "run the probe command and report back", async: false }),
                 ],
                 { stopReason: "toolUse" },

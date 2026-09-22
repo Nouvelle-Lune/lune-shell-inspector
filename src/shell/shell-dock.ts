@@ -3,7 +3,7 @@ import { shellManager } from "./shell-manager.ts";
 
 
 const WIDGET_ID = "pi-shell-view";
-const PEDDING = "";
+const PADDING = "";
 
 export class ShellDock {
     private refreshTimer: ReturnType<typeof setInterval> | undefined;
@@ -63,7 +63,7 @@ export class ShellDock {
             WIDGET_ID,
             [this.ctx.ui.theme.fg(
                 this.selected ? "accent" : "dim",
-                `${PEDDING}${summary} · /shell to open`,
+                `${PADDING}${summary} · /shell to open`,
             )],
             {
                 placement: "belowEditor",
@@ -72,9 +72,8 @@ export class ShellDock {
     }
 
     clear(): void {
-        // Stopping the timer is independent of the UI: a
-        // session that ends must
-        // not keep rendering through its refresh interval.
+        // Stopping the timer is independent of the UI: a session that ends must not keep
+        // rendering through its refresh interval.
         if (this.refreshTimer) {
             clearInterval(this.refreshTimer);
             this.refreshTimer = undefined;
@@ -95,14 +94,14 @@ function shellDockSummary(ctx: ExtensionContext): string {
         status.runningCount === 1 &&
         status.completedCount === 0 &&
         status.failedCount === 0 &&
-        status.stoppedCount === 0
+        status.killedCount === 0
     ) {
         const runningJob = shellManager.getRunningJobsList()[0];
         const elapsedTime = Math.floor((Date.now() - runningJob!.startedAt) / 1000);
         return (ctx.ui.theme.fg("accent", `${status.runningCount} running shell`) + ` · ${truncateOutput(runningJob!.command, 20)} · ${elapsedTime}s`);
     }
     // only one completed shell case
-    if (status.completedCount === 1 && status.runningCount === 0 && status.failedCount === 0 && status.stoppedCount === 0) {
+    if (status.completedCount === 1 && status.runningCount === 0 && status.failedCount === 0 && status.killedCount === 0) {
         const completedJob = shellManager.getCompletedJobsList()[0];
         const elapsedTime = Math.floor((completedJob!.finishedAt! - completedJob!.startedAt) / 1000);
         return (ctx.ui.theme.fg("success", `${status.completedCount} shell completed`) + ` in ${elapsedTime}s`);
@@ -121,8 +120,8 @@ function shellDockSummary(ctx: ExtensionContext): string {
     if (status.failedCount > 0) {
         parts.push(ctx.ui.theme.fg("error", `${status.failedCount} failed`));
     }
-    if (status.stoppedCount > 0) {
-        parts.push(`${status.stoppedCount} stopped`);
+    if (status.killedCount > 0) {
+        parts.push(ctx.ui.theme.fg("error", `${status.killedCount} killed`));
     }
 
     return `${parts.join(" · ")}`;

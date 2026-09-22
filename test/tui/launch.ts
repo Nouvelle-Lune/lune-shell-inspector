@@ -2,31 +2,36 @@
  * Launcher for the real-pi-TUI observer of pi-shell-view.
  *
  * Starts the real `pi` binary in interactive mode, loading this directory's scripted provider plus
- * the repository's `src/index.ts`. A deterministic faux model then asks for exactly one bash tool
- * call, which pi's built-in bash tool executes for real: the extension announces the command with
- * `ctx.ui.notify` and delegates the call, and pi draws and streams the row with its built-in bash
- * renderers (merged by tool name, because the extension defines none). The child inherits stdio, so
- * it draws into the caller's terminal (or into the pty created by `script`), and its exit code is
- * forwarded unchanged.
+ * the repository's `src/index.ts`. A deterministic faux model then asks for bash tool calls, which
+ * pi's built-in bash tool executes for real: the extension either delegates a foreground call
+ * unchanged and pi draws and streams the row with its built-in bash renderers (merged by tool name,
+ * because the extension defines none), or starts a background call that returns immediately and
+ * shows up in the shell dock. The child inherits stdio, so it draws into the caller's terminal (or
+ * into the pty created by `script`), and its exit code is forwarded unchanged.
  *
- * Three scenarios exist:
+ * Four scenarios exist:
  *
- * - `fixture` (default): one scripted bash call, for the dock's own behaviour.
- * - `shelldocksum`: `shelldock-summary-scenario.ts` queues three bash turns that walk the dock
- *   through every summary shape (one running, one completed, mixed counts, a failure, stopped
- *   shells), so the line can be read in the real TUI. Its first turn streams the `long-output`
- *   fixture, whose 200 lines overflow the `/shell` inspector's pane, so the same run also verifies
- *   the inspector's scroll keys by hand.
+ * - `selection` (default): `bash-selection-scenario.ts` scripts two turns that show how a model
+ *   should choose the execution mode - a quick command whose result the turn needs is delegated in
+ *   the foreground, and a long task that may continue independently runs in the background and
+ *   appears in the dock and the `/shell` inspector.
+ * - `fixture`: one scripted bash call, for the row's (foreground, default) or the dock's
+ *   (background, `PI_SHELL_VIEW_MODE=background`) behaviour. Selected with a fixture id.
+ * - `shelldocksum`: `shelldock-summary-scenario.ts` queues four scripted turns of background bash
+ *   calls that walk the dock through every summary shape (one running, one completed, mixed counts,
+ *   a failed shell), so the line can be read in the real TUI. Its first turn streams the
+ *   `long-output` fixture, whose 200 lines overflow the `/shell` inspector's pane, so the same run
+ *   also verifies the inspector's scroll keys by hand.
  * - `subagent`: `subagent-scenario.ts` registers the same faux provider plus an offline probe agent,
- *   and its first scripted turn asks for a bash call and a foreground subagent call at once. pi
- *   runs sibling tool calls concurrently, so the shell dock and pi-subagents' own below-editor
- *   widget are on screen together - the observation this scenario exists for. The pi-subagents
- *   extension is found through `PI_SUBAGENTS_EXTENSION`, the repository's `node_modules`, or the
- *   user package directory.
+ *   and its first scripted turn asks for a background bash call and a foreground subagent call at
+ *   once. The shell job returns immediately while the subagent keeps running, so the shell dock and
+ *   pi-subagents' own below-editor widget are on screen together - the observation this scenario
+ *   exists for. The pi-subagents extension is found through `PI_SUBAGENTS_EXTENSION`, the
+ *   repository's `node_modules`, or the user package directory.
  *
  * Observation only: nothing here asserts anything, the human watching the screen does.
  *
- * Usage: npm run tui:demo [-- <fixture-id>|subagent]
+ * Usage: npm run tui:demo [-- <fixture-id>|selection|shelldocksum|subagent]
  *        PI_SHELL_VIEW_COMMAND=... npm run tui:demo
  */
 import { spawn } from "node:child_process";
@@ -37,6 +42,9 @@ import { fileURLToPath } from "node:url";
 
 /** Fixture driven when neither the positional argument nor `PI_SHELL_VIEW_FIXTURE` is given. */
 const DEFAULT_FIXTURE_ID = "progress";
+
+/** Default scenario: the two execution modes chosen side by side. */
+const BASH_SELECTION_SCENARIO = "selection";
 
 /** Scenario id that additionally loads pi-subagents and drives one foreground subagent. */
 const SUBAGENT_SCENARIO = "subagent";
@@ -49,42 +57,66 @@ const PI_SHELL_VIEW_VARS = [
     "PI_SHELL_VIEW_SCENARIO",
     "PI_SHELL_VIEW_FIXTURE",
     "PI_SHELL_VIEW_COMMAND",
+    "PI_SHELL_VIEW_MODE",
     "PI_SHELL_VIEW_PROBE_COMMAND",
     "PI_SHELL_VIEW_TIMEOUT",
 ] as const;
 
-const USAGE = `Usage: npm run tui:demo [-- <fixture-id>|shelldocksum|subagent]
+const USAGE = `Usage: npm run tui:demo [-- <fixture-id>|selection|shelldocksum|subagent]
        PI_SHELL_VIEW_COMMAND=... npm run tui:demo
 
 Starts the real pi TUI with a scripted faux model and the extension in src/index.ts; the model asks
-for real bash tool calls, the extension announces them and delegates to pi's built-in bash tool, and
-pi draws the rows with its built-in bash renderers.
+for real bash tool calls. A foreground call (mode omitted) is delegated to pi's built-in bash tool,
+which pi draws with its built-in bash renderers; a background call (mode: "background") returns
+immediately and appears in the shell dock below the editor and in the /shell inspector.
 
-  npm run tui:demo                        # default fixture: ${DEFAULT_FIXTURE_ID}
+The default scenario shows the model's mode selection: a quick command whose result the turn needs
+runs in the foreground, a long task that may continue independently runs in the background.
+
+  npm run tui:demo                        # default scenario: ${BASH_SELECTION_SCENARIO}
+  npm run tui:demo -- progress            # single fixture call: ${DEFAULT_FIXTURE_ID} in the foreground
   npm run tui:demo -- failing             # fixture id from test/fixtures/long-running-scripts.ts
   npm run tui:demo -- shelldocksum        # every shell dock summary shape, one after another
   npm run tui:demo -- subagent            # shell dock + pi-subagents widget at the same time
   PI_SHELL_VIEW_COMMAND="ls -la" npm run tui:demo
+  PI_SHELL_VIEW_MODE=background npm run tui:demo -- flood
   PI_SHELL_VIEW_TIMEOUT=5 npm run tui:demo -- flood
 
 The subagent scenario needs pi-subagents: it is looked up at PI_SUBAGENTS_EXTENSION, then
 <repo>/node_modules/pi-subagents/index.js, then ~/.pi/agent/npm/node_modules/pi-subagents/index.js.
 It runs an offline probe agent (registered by test/tui/subagent-scenario.ts) whose own bash command
-is configurable with PI_SHELL_VIEW_PROBE_COMMAND; the parent's bash command stays
+is configurable with PI_SHELL_VIEW_PROBE_COMMAND; the parent's background bash command stays
 PI_SHELL_VIEW_COMMAND.
 
-What to watch for in the fixture scenario: the extension's notification "command: <cmd>", the
-"$ <command>" row pi draws, the output streaming in while the fixture runs, how the row settles
-(success, truncation warning or the failure text for a failing fixture) and the scripted closing
-line "fixture finished".
+What to watch for in the selection scenario (default):
+
+1. turn 1 is the foreground case - the scripted model says it needs the result before continuing and
+   sends the call without a mode, so the "$ <command>" row streams and settles like a plain bash
+   call and no dock entry or /shell job appears.
+2. turn 2 is the background case - the model decides the long fixture can continue on its own and
+   sends mode: "background", so the row settles at once with "Background shell started <id>:
+   <command>", the dock shows "1 running shell · <command> · <Ns> · /shell to open" with the seconds
+   ticking, and /shell shows the same job with its output pane growing while it streams. Press
+   /shell here to scroll the pane (⇧↑/⇧↓, Home/End) while the shell runs.
+3. the closing text arrives after the shell settled, so the dock turns into
+   "1 shell completed in <Ns> · /shell to open" and /shell still shows the finished job.
+
+The background command is the long-output fixture by default; PI_SHELL_VIEW_FIXTURE,
+PI_SHELL_VIEW_COMMAND and PI_SHELL_VIEW_TIMEOUT change what runs in the background.
+
+What to watch for in a fixture run ("npm run tui:demo -- <id>" or PI_SHELL_VIEW_FIXTURE=<id>):
+foreground (the default) draws the "$ <command>" row pi streams and settles - success, truncation
+warning or the failure text for a failing fixture - with no dock entry. With
+PI_SHELL_VIEW_MODE=background the same fixture runs as a managed shell job instead: the row settles
+immediately with "Background shell started <id>: <command>", the dock reports it, and /shell shows
+the job. A non-zero exit is a completed job carrying its exit code; a timeout fails the job.
 
 What to watch for in the shelldocksum scenario: the dock below the editor walks through its summary
 shapes without any keyboard input - "1 running shell · <command> · <Ns> · /shell to open" with the
 seconds ticking, then "1 shell completed in <Ns> · /shell to open", then the count list of a mixed
 list ("3 shells · 2 running · 1 completed · /shell to open" ... "3 shells · 1 running ·
-1 completed · 1 failed · /shell to open"), and finally "5 shells · 2 running ·
-2 completed · 1 failed · /shell to open". Pressing Esc while the last two
-sleeps run aborts them and the settled line reports the stopped shells.
+1 completed · 1 failed · /shell to open"), and finally "5 shells · 4 completed · 1 failed ·
+/shell to open".
 
 The first turn is the inspector's scroll demo: the long-output fixture streams 200 lines, notifies
 "press /shell to scroll this output (⇧↑/⇧↓, Home/End)" when it starts, and its output is longer than
@@ -113,17 +145,36 @@ function positional(argv: string[]): string | undefined {
 }
 
 /** Scenario named by the positional argument or `PI_SHELL_VIEW_SCENARIO`, if any. */
-type TuiScenario = typeof SHELLDOCK_SUMMARY_SCENARIO | typeof SUBAGENT_SCENARIO;
+type TuiScenario =
+    | typeof BASH_SELECTION_SCENARIO
+    | typeof SHELLDOCK_SUMMARY_SCENARIO
+    | typeof SUBAGENT_SCENARIO;
 
 /** Every scenario id the launcher knows; anything else is treated as a fixture id. */
 function isScenario(selection: string | undefined): selection is TuiScenario {
-    return selection === SHELLDOCK_SUMMARY_SCENARIO || selection === SUBAGENT_SCENARIO;
+    return selection === BASH_SELECTION_SCENARIO ||
+        selection === SHELLDOCK_SUMMARY_SCENARIO ||
+        selection === SUBAGENT_SCENARIO;
 }
 
-/** Scenario of this run: positional argument first, then `PI_SHELL_VIEW_SCENARIO`. */
+/**
+ * Scenario of this run.
+ *
+ * A positional or `PI_SHELL_VIEW_SCENARIO` scenario id wins; a positional or `PI_SHELL_VIEW_FIXTURE`
+ * fixture id keeps the single-call fixture scenario; with nothing selected at all the default is the
+ * scenario that shows foreground/background selection.
+ */
 function selectedScenario(argv: string[]): TuiScenario | undefined {
     const selection = positional(argv) ?? process.env.PI_SHELL_VIEW_SCENARIO;
-    return isScenario(selection) ? selection : undefined;
+    if (isScenario(selection)) {
+        return selection;
+    }
+
+    if (positional(argv) !== undefined || process.env.PI_SHELL_VIEW_FIXTURE !== undefined) {
+        return undefined;
+    }
+
+    return BASH_SELECTION_SCENARIO;
 }
 
 /** Fixture id of this run: positional argument first, then `PI_SHELL_VIEW_FIXTURE`, then the default. */
@@ -176,6 +227,8 @@ function childEnv(): NodeJS.ProcessEnv {
 /** Extensions pi loads for a scenario, in load order; the fixture scenario needs no scenario extension. */
 function scenarioExtensions(scenario: TuiScenario | undefined): string[] {
     switch (scenario) {
+        case BASH_SELECTION_SCENARIO:
+            return [repoFile("bash-selection-scenario.ts"), repoFile("../../src/index.ts")];
         case SUBAGENT_SCENARIO:
             return [repoFile("subagent-scenario.ts"), resolveSubagentExtension(), repoFile("../../src/index.ts")];
         case SHELLDOCK_SUMMARY_SCENARIO:
@@ -211,7 +264,9 @@ function main(): void {
             ? "run the shell-view subagent fixture"
             : scenario === SHELLDOCK_SUMMARY_SCENARIO
                 ? "run the shell-view dock summary fixture"
-                : "run the shell-view fixture",
+                : scenario === BASH_SELECTION_SCENARIO
+                    ? "run the shell-view bash selection fixture"
+                    : "run the shell-view fixture",
     ];
 
     const child = spawn("pi", args, {

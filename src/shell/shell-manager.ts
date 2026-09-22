@@ -2,7 +2,7 @@ export type ShellJobStatus =
     | "running"
     | "completed"
     | "failed"
-    | "stopped";
+    | "killed";
 
 export interface ShellJob {
     id: string;
@@ -19,22 +19,39 @@ export interface ShellJob {
 
     exitCode?: number;
     error?: string;
+
+    controller: AbortController;
 }
 
-interface JobsStatusStat {
+export interface JobsStatusStat {
     runningCount: number;
     completedCount: number;
     failedCount: number;
-    stoppedCount: number;
+    killedCount: number;
 }
 
-type ShellManagerEvent =
+export type ShellManagerEvent =
     | { type: "job-started"; id: string }
     | { type: "job-completed"; id: string }
     | { type: "job-failed"; id: string }
-    | { type: "job-stopped"; id: string }
+    | { type: "job-killed"; id: string }
     | { type: "jobs-cleared" }
     | { type: "output-updated"; id: string };
+
+export type ShellJobOutcome =
+    | {
+        type: "completed";
+        exitCode?: number;
+    }
+    | {
+        type: "failed";
+        error: string;
+        exitCode?: number;
+    }
+    | {
+        type: "killed";
+        error?: string;
+    };
 
 export type ShellManagerListener = (event: ShellManagerEvent) => void;
 
@@ -47,7 +64,7 @@ export class ShellManager {
             runningCount: 0,
             completedCount: 0,
             failedCount: 0,
-            stoppedCount: 0,
+            killedCount: 0,
         };
     }
 
@@ -55,6 +72,7 @@ export class ShellManager {
         id: string;
         command: string;
         cwd: string;
+        controller: AbortController;
     }): void {
         // Ids come from tool call ids; a duplicate means a caller bug, and
         // overwriting would discard a live job's output mid-stream.
@@ -72,6 +90,7 @@ export class ShellManager {
             startedAt: now,
             lastActivityAt: now,
             output: "",
+            controller: input.controller,
         });
 
         this.jobsStatusStat.runningCount++;
@@ -82,72 +101,19 @@ export class ShellManager {
         });
     }
 
-    completeJob(id: string, output: string): void {
-        const job = this.getRunningJob(id);
-        const now = Date.now();
-
-        job.output = output;
-        job.status = "completed";
-        job.finishedAt = now;
-        job.lastActivityAt = now;
-
-        this.jobsStatusStat.runningCount--;
-        this.jobsStatusStat.completedCount++;
-
-        this.emit({
-            type: "job-completed",
-            id: id
-        });
-    }
-
-    failJob(
-        id: string,
-        error: string,
-        exitCode?: number,
-    ): void {
-        const job = this.getRunningJob(id);
-        const now = Date.now();
-
-        job.status = "failed";
-        job.error = error;
-        job.exitCode = exitCode;
-        job.finishedAt = now;
-        job.lastActivityAt = now;
-
-        this.jobsStatusStat.runningCount--;
-        this.jobsStatusStat.failedCount++;
-
-        this.emit({
-            type: "job-failed",
-            id: id
-        });
-    }
-
-    stopJob(id: string, error: string): void {
-        const job = this.getRunningJob(id);
-        const now = Date.now();
-
-        job.status = "stopped";
-        job.error = error;
-        job.finishedAt = now;
-        job.lastActivityAt = now;
-
-        this.jobsStatusStat.runningCount--;
-        this.jobsStatusStat.stoppedCount++;
-
-        this.emit({
-            type: "job-stopped",
-            id: id
-        });
-    }
-
     clearAllJobs(): void {
+        // Session teardown must not leave processes running behind the cleared job list.
+        const runningJobs = this.getRunningJobsList();
+        for (const job of runningJobs) {
+            job.controller.abort();
+        }
+
         this.jobs.clear();
 
         this.jobsStatusStat.runningCount = 0;
         this.jobsStatusStat.completedCount = 0;
         this.jobsStatusStat.failedCount = 0;
-        this.jobsStatusStat.stoppedCount = 0;
+        this.jobsStatusStat.killedCount = 0;
 
         this.emit({
             type: "jobs-cleared"
@@ -166,6 +132,21 @@ export class ShellManager {
         }
 
         job.output = output;
+        job.lastActivityAt = Date.now();
+
+        this.emit({
+            type: "output-updated",
+            id: id
+        });
+    }
+
+    appendOutput(
+        id: string,
+        chunk: string,
+    ): void {
+        const job = this.getRunningJob(id);
+
+        job.output += chunk;
         job.lastActivityAt = Date.now();
 
         this.emit({
@@ -200,7 +181,7 @@ export class ShellManager {
             runningCount: this.jobsStatusStat.runningCount,
             completedCount: this.jobsStatusStat.completedCount,
             failedCount: this.jobsStatusStat.failedCount,
-            stoppedCount: this.jobsStatusStat.stoppedCount,
+            killedCount: this.jobsStatusStat.killedCount,
         };
     }
 
@@ -210,6 +191,27 @@ export class ShellManager {
         return () => {
             this.listeners.delete(listener);
         };
+    }
+
+    settleJob(
+        id: string,
+        outcome: ShellJobOutcome,
+    ): boolean {
+        // Settling is idempotent: the detached execution can race session teardown, and a job that
+        // is unknown or no longer running must not be settled again (or counted twice).
+        if (this.getJob(id)?.status !== "running") {
+            return false;
+        }
+
+        if (outcome.type === "completed") {
+            this.completeJob(id, outcome.exitCode);
+        } else if (outcome.type === "failed") {
+            this.failJob(id, outcome.error, outcome.exitCode);
+        } else if (outcome.type === "killed") {
+            this.killJob(id, outcome.error ?? "killed");
+        }
+
+        return true;
     }
 
     private requireJob(id: string): ShellJob {
@@ -238,6 +240,67 @@ export class ShellManager {
         for (const listener of this.listeners) {
             listener(event);
         }
+    }
+
+    private completeJob(id: string, exitCode?: number): void {
+        const job = this.getRunningJob(id);
+        const now = Date.now();
+
+        job.status = "completed";
+        job.exitCode = exitCode;
+        job.finishedAt = now;
+        job.lastActivityAt = now;
+
+        this.jobsStatusStat.runningCount--;
+        this.jobsStatusStat.completedCount++;
+
+        this.emit({
+            type: "job-completed",
+            id: id
+        });
+    }
+
+    private failJob(
+        id: string,
+        error: string,
+        exitCode?: number,
+    ): void {
+        const job = this.getRunningJob(id);
+        const now = Date.now();
+
+        job.status = "failed";
+        job.error = error;
+        job.exitCode = exitCode;
+        job.finishedAt = now;
+        job.lastActivityAt = now;
+
+        this.jobsStatusStat.runningCount--;
+        this.jobsStatusStat.failedCount++;
+
+        this.emit({
+            type: "job-failed",
+            id: id
+        });
+    }
+
+    private killJob(id: string, error: string): void {
+        const job = this.getRunningJob(id);
+        const now = Date.now();
+
+        // Aborting is what stops the process tree; a killed job has no exit code of its own.
+        job.controller.abort();
+        job.status = "killed";
+        job.error = error;
+        job.finishedAt = now;
+        job.lastActivityAt = now;
+
+        this.jobsStatusStat.runningCount--;
+        this.jobsStatusStat.killedCount++;
+
+        this.emit({
+            type: "job-killed",
+            id: id
+        });
     }
 }
 

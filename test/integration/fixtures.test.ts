@@ -2,9 +2,11 @@
  * Long-running fixture contract of the registered `bash` tool.
  *
  * Every fixture is a real script that keeps running for a few seconds and streams output while it
- * runs, so one delegation pass exercises the whole chain: the built-in tool spawning the process,
- * its throttled `onUpdate` snapshots, the settled result (or failure) and the truncation details for
- * output that exceeds pi's display limits. The expectations live next to the scripts in
+ * runs, so one foreground delegation pass (the default mode) exercises the whole chain: the built-in
+ * tool spawning the process, its throttled `onUpdate` snapshots, the settled result (or failure) and
+ * the truncation details for output that exceeds pi's display limits. The same fixtures also drive
+ * the background path, which streams into a shell job instead - see
+ * `test/integration/background-bash.test.ts`. The expectations live next to the scripts in
  * `test/fixtures/long-running-scripts.ts`.
  */
 import assert from "node:assert/strict";

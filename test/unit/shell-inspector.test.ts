@@ -59,7 +59,7 @@ function lineOutput(count: number): string {
 
 /** Add a running job whose output is already complete for the purposes of rendering. */
 function addJob(id: string, command: string, output: string): void {
-    shellManager.startJob({ id, command, cwd: "/work" });
+    shellManager.startJob({ id, command, cwd: "/work", controller: new AbortController() });
     shellManager.updateOutput(id, output);
 }
 
@@ -155,6 +155,23 @@ describe("shell inspector", () => {
 
         assert.deepEqual(visibleOutput(), ["line 1", "line 2", "line 3"]);
         assert.equal(pausedMarker(), undefined);
+    });
+
+    it("renders every settled status with its own colour", () => {
+        // Contract: the inspector colours a job by status in both panes - completed is success,
+        // failed is the error colour, and a killed background shell is muted.
+        shellManager.startJob({ id: "completed", command: "echo done", cwd: "/work", controller: new AbortController() });
+        shellManager.settleJob("completed", { type: "completed", exitCode: 0 });
+        shellManager.startJob({ id: "failed", command: "exit 1", cwd: "/work", controller: new AbortController() });
+        shellManager.settleJob("failed", { type: "failed", error: "Command exited with code 1", exitCode: 1 });
+        shellManager.startJob({ id: "killed", command: "sleep 60", cwd: "/work", controller: new AbortController() });
+        shellManager.settleJob("killed", { type: "killed", error: "timeout:1" });
+
+        const { fgCalls } = frame();
+
+        assert.ok(fgCalls.some((call) => call.color === "success" && call.text === "completed"));
+        assert.ok(fgCalls.some((call) => call.color === "error" && call.text === "failed"));
+        assert.ok(fgCalls.some((call) => call.color === "muted" && call.text === "killed"));
     });
 
     it("scrolls one line back with Shift+Up and pauses the newest output", () => {
