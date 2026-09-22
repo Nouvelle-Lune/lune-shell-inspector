@@ -131,10 +131,10 @@ export class ShellInspector implements Component {
         }
 
         const scrollStep = matchesKey(data, Key.shift("up")) ||
-                matchesKey(data, Key.shift("k"))
+            matchesKey(data, Key.shift("k"))
             ? -1
             : matchesKey(data, Key.shift("down")) ||
-                    matchesKey(data, Key.shift("j"))
+                matchesKey(data, Key.shift("j"))
                 ? 1
                 : 0;
 
@@ -188,7 +188,7 @@ export class ShellInspector implements Component {
 
         const innerWidth = Math.max(
             LEFT_PANE_MIN_WIDTH + RIGHT_PANE_MIN_WIDTH + 1,
-            width - 2,
+            width - 2, // Leave one column for each frame border: │ content │
         );
 
         const leftWidth = Math.min(
@@ -200,9 +200,16 @@ export class ShellInspector implements Component {
             innerWidth - RIGHT_PANE_MIN_WIDTH - 1,
         );
 
-        const rightWidth = innerWidth - leftWidth - 1;
-
+        const rightWidth = innerWidth - leftWidth - 1; // Leave one column for the separator: │ left │ right │
+        /**
+         * Render the left pane with the list of jobs.
+         * › ● npm test                    running
+         *   ● npm example bash ...        running
+         */
         const left = this.renderJobs(jobs, leftWidth, bodyHeight);
+        /**
+         * Render the right pane with the details of the selected job.
+         */
         const right = this.renderDetails(
             jobs[this.selectedIndex]!,
             rightWidth,
@@ -253,6 +260,7 @@ export class ShellInspector implements Component {
         this.unsubscribeJobs = undefined;
     }
 
+    /** Calculate the height of shell inspector. */
     private bodyHeight(): number {
         return Math.min(
             BODY_MAX_HEIGHT,
@@ -326,6 +334,7 @@ export class ShellInspector implements Component {
         return this.theme.fg("accent", "●") + ` ${name}${suffix}`;
     }
 
+    /** Render the footer of the shell inspector. */
     private renderFooter(width: number): string {
         return this.cell(
             this.theme.fg(
