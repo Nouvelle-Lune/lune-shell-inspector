@@ -21,6 +21,7 @@ import {
     createFakeContext,
     createTempWorkDir,
     openSession,
+    readJobScreen,
     removeTempWorkDir,
     requireError,
     requireResult,
@@ -134,6 +135,71 @@ describe("pi-shell-view background bash", () => {
         assert.equal(settled.output, "plain\ncr\rback\ncolored: \u001b[31mred\u001b[0m\n");
     });
 
+    it("shows the progress fixture's screen instead of its redraws", async () => {
+        // Contract: the job keeps the raw stream - every carriage-return redraw - while readers get
+        // the executed screen, so a progress bar is one line and no control byte reaches a renderer.
+        const fixture = getFixture("progress");
+        const { jobId } = await startBackgroundBashCommand(session.tool, {
+            command: fixture.command,
+            ctx: session.ctx,
+            toolCallId: "call-progress-screen",
+        });
+
+        const settled = await waitForJobSettled(jobId);
+        const screen = await readJobScreen(jobId);
+
+        assert.ok(settled.output.includes("\r"), "the raw output must still carry every redraw");
+        assert.deepEqual(screen, ["progress: 100%", "progress: done"]);
+    });
+
+    it("shows the spinner fixture's erased line as its final screen line", async () => {
+        // Contract: erase-line (CSI K), SGR colour and carriage returns are executed, not displayed,
+        // so only the line the fixture finished with is left on the screen.
+        const fixture = getFixture("spinner");
+        const { jobId } = await startBackgroundBashCommand(session.tool, {
+            command: fixture.command,
+            ctx: session.ctx,
+            toolCallId: "call-spinner-screen",
+        });
+
+        const settled = await waitForJobSettled(jobId);
+        const screen = await readJobScreen(jobId);
+
+        assert.ok(settled.output.includes("\u001b[2K"), "the raw output must still carry the erase-line sequence");
+        assert.deepEqual(screen, ["spinner: done"]);
+    });
+
+    it("shows the vt-shapes fixture exactly as the terminal executed it", async () => {
+        // Contract: one real stream through every shape the inspector has to survive - carriage-return
+        // redraws, erase-line, cursor-left/right/up, SGR colour and bold, a CSI split across chunks, a
+        // carriage return split across chunks, CJK/emoji/wide cells and a line wider than the emulator.
+        // The expected lines are screen results: the cursor-up overwrite and the erased scratch row
+        // only exist after the emulator ran the stream.
+        const fixture = getFixture("vt-shapes");
+        const { jobId } = await startBackgroundBashCommand(session.tool, {
+            command: fixture.command,
+            ctx: session.ctx,
+            toolCallId: "call-vt-shapes",
+        });
+
+        await waitForJobSettled(jobId, 30_000);
+        const screen = await readJobScreen(jobId);
+
+        assert.deepEqual(screen, [
+            "progress 3%",
+            "bar",
+            "cursor-left : abcXYf",
+            "cursor-right: AB   XY",
+            "cursor-up   : hit!",
+            "red and bold",
+            "chunked red",
+            "progress 2%",
+            "日本語の進捗テスト: 五割 🚀",
+            `wide: ${"漢".repeat(70)}`,
+            "vt-shapes: done",
+        ]);
+    });
+
     it("keeps the complete output of a flood that would be truncated in the foreground", async () => {
         // Contract: nothing truncates the job output - the built-in 2000-line/50KB limit applies to
         // the foreground display text, not to what the background runner appends.
@@ -150,6 +216,13 @@ describe("pi-shell-view background bash", () => {
         assert.ok(settled.output.length > 200 * 1024, `expected the complete ~200KB flood, got ${settled.output.length} bytes`);
         assert.ok(settled.output.includes("flood line 05000"), "the last flood line must be kept");
         assert.equal(settled.output.includes("[Showing lines"), false, "the job output must not carry a truncation footer");
+
+        // The screen converts the same run in arrival order (fifty streamed batches of a hundred
+        // lines), so the newest line is last and nothing was reordered or lost on the way.
+        const screen = await readJobScreen(jobId);
+        assert.equal(screen.length, 5000, "the flood's 5000 lines must reach the screen");
+        assert.equal(screen.at(0), `flood line 00001 ${"x".repeat(24)}`);
+        assert.equal(screen.at(-1), `flood line 05000 ${"x".repeat(24)}`);
     });
 
     it("settles a non-zero exit as completed with its exit code", async () => {

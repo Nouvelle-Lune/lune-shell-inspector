@@ -16,9 +16,11 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
 import { ShellInspector } from "../../src/shell/shell-inspector.ts";
 import { shellManager } from "../../src/shell/shell-manager.ts";
+import { readJobScreen } from "../harness.ts";
 
 /** Raw sequences a terminal sends for the inspector's keys. */
 const SHIFT_UP = "\x1b[1;2A";
@@ -57,10 +59,16 @@ function lineOutput(count: number): string {
     return Array.from({ length: count }, (_, index) => `line ${index + 1}`).join("\n");
 }
 
-/** Add a running job whose output is already complete for the purposes of rendering. */
-function addJob(id: string, command: string, output: string): void {
-    shellManager.startJob({ id, command, cwd: "/work", controller: new AbortController() });
+/** Replace a job's output and wait until the emulator has executed it. */
+async function replaceOutput(id: string, output: string): Promise<void> {
     shellManager.updateOutput(id, output);
+    await readJobScreen(id);
+}
+
+/** Add a running job whose output is already complete for the purposes of rendering. */
+async function addJob(id: string, command: string, output: string): Promise<void> {
+    shellManager.startJob({ id, command, cwd: "/work", controller: new AbortController() });
+    await replaceOutput(id, output);
 }
 
 /** The right pane of one rendered line; empty for the separator and border lines. */
@@ -139,8 +147,8 @@ describe("shell inspector", () => {
             ?.text;
     }
 
-    it("pins the output pane to the newest lines", () => {
-        addJob("job-1", "tail -f app.log", lineOutput(40));
+    it("pins the output pane to the newest lines", async () => {
+        await addJob("job-1", "tail -f app.log", lineOutput(40));
 
         const visible = visibleOutput();
 
@@ -150,8 +158,8 @@ describe("shell inspector", () => {
         assert.equal(pausedMarker(), undefined);
     });
 
-    it("shows the newest output of a short job without a pause marker", () => {
-        addJob("job-1", "echo done", lineOutput(3));
+    it("shows the newest output of a short job without a pause marker", async () => {
+        await addJob("job-1", "echo done", lineOutput(3));
 
         assert.deepEqual(visibleOutput(), ["line 1", "line 2", "line 3"]);
         assert.equal(pausedMarker(), undefined);
@@ -174,8 +182,8 @@ describe("shell inspector", () => {
         assert.ok(fgCalls.some((call) => call.color === "muted" && call.text === "killed"));
     });
 
-    it("scrolls one line back with Shift+Up and pauses the newest output", () => {
-        addJob("job-1", "tail -f app.log", lineOutput(40));
+    it("scrolls one line back with Shift+Up and pauses the newest output", async () => {
+        await addJob("job-1", "tail -f app.log", lineOutput(40));
         const redrawsBefore = renderRequests;
 
         press(SHIFT_UP);
@@ -188,16 +196,16 @@ describe("shell inspector", () => {
         assert.equal(renderRequests, redrawsBefore + 1, "scrolling must ask for a redraw");
     });
 
-    it("scrolls one line back with Shift+K", () => {
-        addJob("job-1", "tail -f app.log", lineOutput(40));
+    it("scrolls one line back with Shift+K", async () => {
+        await addJob("job-1", "tail -f app.log", lineOutput(40));
 
         press("K");
 
         assert.equal(visibleOutput().at(-1), "line 39");
     });
 
-    it("scrolls one line forward with Shift+Down and leaves the pause", () => {
-        addJob("job-1", "tail -f app.log", lineOutput(40));
+    it("scrolls one line forward with Shift+Down and leaves the pause", async () => {
+        await addJob("job-1", "tail -f app.log", lineOutput(40));
 
         press(SHIFT_UP);
         press(SHIFT_UP);
@@ -209,8 +217,8 @@ describe("shell inspector", () => {
         assert.equal(pausedMarker(), " · paused ↑1");
     });
 
-    it("resumes following once the newest line is in view again", () => {
-        addJob("job-1", "tail -f app.log", lineOutput(40));
+    it("resumes following once the newest line is in view again", async () => {
+        await addJob("job-1", "tail -f app.log", lineOutput(40));
 
         press(SHIFT_UP);
         press("J");
@@ -218,26 +226,26 @@ describe("shell inspector", () => {
         assert.equal(pausedMarker(), undefined);
         assert.equal(visibleOutput().at(-1), "line 40");
 
-        shellManager.updateOutput("job-1", lineOutput(41));
+        await replaceOutput("job-1", lineOutput(41));
 
         assert.equal(visibleOutput().at(-1), "line 41", "following means new output moves the pane");
     });
 
-    it("keeps a paused pane anchored while new output streams in", () => {
-        addJob("job-1", "tail -f app.log", lineOutput(40));
+    it("keeps a paused pane anchored while new output streams in", async () => {
+        await addJob("job-1", "tail -f app.log", lineOutput(40));
 
         press(SHIFT_UP);
         press(SHIFT_UP);
         const paused = visibleOutput();
 
-        shellManager.updateOutput("job-1", lineOutput(41));
+        await replaceOutput("job-1", lineOutput(41));
 
         assert.deepEqual(visibleOutput(), paused, "a paused pane must not drift with the tail");
         assert.equal(pausedMarker(), " · paused ↑3");
     });
 
-    it("does not scroll past the oldest line", () => {
-        addJob("job-1", "tail -f app.log", lineOutput(40));
+    it("does not scroll past the oldest line", async () => {
+        await addJob("job-1", "tail -f app.log", lineOutput(40));
 
         for (let i = 0; i < 100; i++) {
             press(SHIFT_UP);
@@ -246,8 +254,8 @@ describe("shell inspector", () => {
         assert.equal(visibleOutput().at(0), "line 1");
     });
 
-    it("ignores scrolling on a job with nothing to scroll", () => {
-        addJob("job-1", "echo done", lineOutput(3));
+    it("ignores scrolling on a job with nothing to scroll", async () => {
+        await addJob("job-1", "echo done", lineOutput(3));
 
         press(SHIFT_UP);
 
@@ -255,8 +263,8 @@ describe("shell inspector", () => {
         assert.equal(pausedMarker(), undefined);
     });
 
-    it("jumps to the oldest line with Home and back to the newest with End", () => {
-        addJob("job-1", "tail -f app.log", lineOutput(40));
+    it("jumps to the oldest line with Home and back to the newest with End", async () => {
+        await addJob("job-1", "tail -f app.log", lineOutput(40));
 
         press(HOME);
 
@@ -269,9 +277,9 @@ describe("shell inspector", () => {
         assert.equal(pausedMarker(), undefined);
     });
 
-    it("shows the newest output of the selected job after switching jobs", () => {
-        addJob("job-a", "tail -f a.log", lineOutput(40));
-        addJob("job-b", "echo b", lineOutput(3));
+    it("shows the newest output of the selected job after switching jobs", async () => {
+        await addJob("job-a", "tail -f a.log", lineOutput(40));
+        await addJob("job-b", "echo b", lineOutput(3));
 
         press(SHIFT_UP);
         assert.equal(pausedMarker(), " · paused ↑1");
@@ -287,12 +295,80 @@ describe("shell inspector", () => {
         assert.equal(pausedMarker(), undefined);
     });
 
-    it("keeps plain j and k on job selection instead of scrolling", () => {
-        addJob("job-a", "tail -f a.log", lineOutput(40));
-        addJob("job-b", "echo b", lineOutput(3));
+    it("keeps plain j and k on job selection instead of scrolling", async () => {
+        await addJob("job-a", "tail -f a.log", lineOutput(40));
+        await addJob("job-b", "echo b", lineOutput(3));
 
         press("j");
 
         assert.deepEqual(visibleOutput(), ["line 1", "line 2", "line 3"]);
+    });
+
+    it("shows the last chunk even when the job settles before the next frame", async () => {
+        // Contract: the TUI renders on a timer, and xterm parses queued writes on the first timer
+        // after the write, so a job that streams and exits in one turn still shows its last line.
+        shellManager.startJob({ id: "job-1", command: "npm run build", cwd: "/work", controller: new AbortController() });
+        shellManager.appendOutput("job-1", "step 1\rstep 2");
+        shellManager.settleJob("job-1", { type: "completed", exitCode: 0 });
+
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        assert.equal(visibleOutput().at(-1), "step 2");
+    });
+
+    it("renders control sequences as the screen state they produce", async () => {
+        // Regression: \r redraws, SGR colour and OSC titles used to reach the pane as plain text,
+        // so a progress bar stacked one line per redraw and escape bytes leaked into the TUI frame.
+        await addJob(
+            "job-1",
+            "npm run build",
+            "\x1b[32mflip-pairwise: 8%\x1b[0m\r" +
+            "flip-pairwise: 61%\r" +
+            "flip-pairwise: 100%\x1b[K\n" +
+            "\x1b]0;build\x07done\n",
+        );
+
+        assert.deepEqual(visibleOutput(), ["flip-pairwise: 100%", "done"]);
+        assert.ok(
+            !visibleOutput().some((line) => line.includes("\x1b")),
+            "no escape sequence may survive into the pane",
+        );
+    });
+
+    it("keeps a line wider than the emulator as one pane line", async () => {
+        // The emulator wraps at 120 columns; the pane must still see one logical line, not the rows
+        // that wrap produced.
+        await addJob("job-1", "cat wide.txt", `${"x".repeat(400)}\n`);
+
+        const visible = visibleOutput();
+
+        assert.equal(visible.length, 1, "a wrapped line must not fill the pane with rows");
+        assert.ok(visible[0]!.startsWith("x".repeat(50)));
+    });
+
+    it("says that a running job has no output yet", async () => {
+        shellManager.startJob({ id: "job-1", command: "sleep 5", cwd: "/work", controller: new AbortController() });
+
+        assert.deepEqual(visibleOutput(), ["no output yet"]);
+    });
+
+    it("keeps the last screen of a settled job", async () => {
+        await addJob("job-1", "npm test", "suite 1 ok\n");
+        shellManager.settleJob("job-1", { type: "completed", exitCode: 0 });
+
+        assert.deepEqual(visibleOutput(), ["suite 1 ok"]);
+    });
+
+    it("truncates a wide line to the pane without changing the job's screen", async () => {
+        // The pane decides what to cut, so the emulator keeps the full logical line: line count and
+        // scrolling stay independent of the pane's width.
+        const wide = "x".repeat(400);
+        await addJob("job-1", "cat wide.txt", `${wide}\n`);
+
+        const narrow = inspector.render(70);
+
+        assert.ok(narrow.every((line) => visibleWidth(line) === 70), "every row must fit the narrow frame");
+        assert.ok(narrow.some((line) => line.includes("…")), "the pane must mark the truncation");
+        assert.deepEqual(shellManager.getScreenLines("job-1"), [wide]);
     });
 });

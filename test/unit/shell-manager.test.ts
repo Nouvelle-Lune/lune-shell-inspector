@@ -5,7 +5,8 @@
  * from `running` to exactly one settled status through the single public entry point `settleJob`.
  * The tests lock the observable contract - job fields and their timestamps, the controller a job
  * owns, the two output writers (`appendOutput` for the raw chunks the background runner streams,
- * `updateOutput` for callers that replace the whole text), the outcome each settle accepts, the
+ * `updateOutput` for callers that replace the whole text), the screen every job exposes to readers
+ * (`getScreenLines` returns the output after a headless terminal executed it), the outcome each settle accepts, the
  * idempotence of settling (a job that is unknown or already settled is refused without an event or
  * a counter change), the per-status counters, and the notification semantics (synchronous, once
  * per mutation, unsubscribe-able) including the behaviour of a subscriber that throws.
@@ -447,6 +448,233 @@ describe("ShellManager", () => {
                 /Shell job "completed" is not running: completed/,
             );
             assert.equal(manager.getJob("completed")?.output, "final");
+        });
+    });
+
+    describe("getScreenLines", () => {
+        /**
+         * The job's screen once the emulator has executed everything written to it so far.
+         *
+         * Jobs stream raw VT instructions into a headless terminal, which parses queued writes on a
+         * later tick; reading without flushing would see the previous screen.
+         */
+        async function screenLines(manager: ShellManager, id: string): Promise<string[]> {
+            const terminal = manager.getJob(id)!.terminal;
+            await new Promise<void>((resolve) => terminal.write("", () => resolve()));
+
+            return manager.getScreenLines(id);
+        }
+
+        it("returns the executed screen instead of the raw text", async () => {
+            // Contract: readers get the result of the VT instructions - the redraws collapsed, the
+            // erased text gone - and never the control bytes themselves.
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            manager.appendOutput("job-a", "\x1b[32mprogress 1%\x1b[0m\rprogress 50%\r\x1b[Kprogress 100%\n");
+
+            assert.deepEqual(await screenLines(manager, "job-a"), ["progress 100%"]);
+        });
+
+        it("has no lines before anything was written", async () => {
+            // Contract: the emulator's fixed height must not leak into readers as blank lines.
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+
+            assert.deepEqual(await screenLines(manager, "job-a"), []);
+        });
+
+        it("keeps plain lines in order and adds no line for a trailing newline", async () => {
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            manager.appendOutput("job-a", "hello world\n");
+            manager.appendOutput("job-a", "second\nthird\n");
+
+            assert.deepEqual(await screenLines(manager, "job-a"), ["hello world", "second", "third"]);
+        });
+
+        it("collapses carriage-return redraws into the current line", async () => {
+            // The tqdm shape: one line rewritten in place. Nothing may be left over from the longer
+            // earlier redraws and nothing may stack up as separate lines.
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            manager.appendOutput("job-a", "progress 1%\rprogress 50%\rprogress 100%");
+
+            assert.deepEqual(await screenLines(manager, "job-a"), ["progress 100%"]);
+        });
+
+        it("applies erase-line and keeps a partial last line", async () => {
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            manager.appendOutput("job-a", "downloading 100%\x1b[2K\rdone");
+
+            assert.deepEqual(await screenLines(manager, "job-a"), ["done"]);
+        });
+
+        it("applies cursor movement to the screen", async () => {
+            // Cursor-left overwrites in place, cursor-up returns to the row above at the same column,
+            // and cursor-right moves over the cells the earlier text never filled.
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            manager.appendOutput("job-a", "abcdef\x1b[3DXY\nsecond\x1b[A!\x1b[7Cend");
+
+            assert.deepEqual(await screenLines(manager, "job-a"), ["abcXYf!       end", "second"]);
+        });
+
+        it("strips SGR styling and window-title sequences", async () => {
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            manager.appendOutput("job-a", "\x1b[31mred\x1b[0m plain \x1b[1;44mbold on blue\x1b[0m\n");
+            manager.appendOutput("job-a", "\x1b]0;window title\x07after title\n");
+
+            assert.deepEqual(
+                await screenLines(manager, "job-a"),
+                ["red plain bold on blue", "after title"],
+            );
+        });
+
+        it("carries the parser across chunks that split a sequence", async () => {
+            // Chunk boundaries are a transport artefact: a CSI split after `ESC [` and a carriage
+            // return split from the text it overwrites must end up like one write.
+            const chunks = ["\x1b[", "31mred", "%\rprog", "ress 2%\n"];
+
+            const split = new ShellManager();
+            startRunningJob(split, { id: "job-a" });
+            for (const chunk of chunks) {
+                split.appendOutput("job-a", chunk);
+            }
+
+            const single = new ShellManager();
+            startRunningJob(single, { id: "job-b" });
+            single.appendOutput("job-b", chunks.join(""));
+
+            assert.deepEqual(await screenLines(split, "job-a"), ["progress 2%"]);
+            assert.deepEqual(await screenLines(split, "job-a"), await screenLines(single, "job-b"));
+        });
+
+        it("keeps wide characters and emoji intact", async () => {
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            manager.appendOutput("job-a", "進捗: 50%\r進捗: 100% ✓\nemoji: 🚀 done\n");
+
+            assert.deepEqual(
+                await screenLines(manager, "job-a"),
+                ["進捗: 100% ✓", "emoji: 🚀 done"],
+            );
+        });
+
+        it("rejoins wrapped rows but keeps explicit line breaks", async () => {
+            // Contract: `isWrapped` marks the rows the emulator produced itself, so a line wider than
+            // the screen is one logical line while a `\n` stays a line of its own. A wide character
+            // that cannot fit the last column moves to the next row and must survive the join.
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            const wide = "x".repeat(400);
+            const straddling = "s".repeat(119) + "漢" + "end";
+            manager.appendOutput("job-a", `${wide}\n${straddling}\nnext\n`);
+
+            assert.deepEqual(await screenLines(manager, "job-a"), [wide, straddling, "next"]);
+        });
+
+        it("drops the blank rows the screen pads itself with but keeps blank output lines", async () => {
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            manager.appendOutput("job-a", "first\n\nsecond\n\n");
+
+            assert.deepEqual(await screenLines(manager, "job-a"), ["first", "", "second"]);
+        });
+
+        it("rebuilds the screen when a caller replaces the whole output", async () => {
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            manager.appendOutput("job-a", "old\n");
+            manager.updateOutput("job-a", "new\n");
+
+            assert.deepEqual(await screenLines(manager, "job-a"), ["new"]);
+        });
+
+        it("wipes cursor, colour and alternate-screen state when the output is replaced", async () => {
+            // Contract: the replacement is a full reset, so nothing the previous text did to the
+            // screen survives it - not its history, its cursor, its style or its alt buffer.
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            manager.appendOutput("job-a", Array.from({ length: 40 }, (_, index) => `old ${index}`).join("\n"));
+            manager.appendOutput("job-a", "\x1b[31mred\x1b[10;10Hmoved\x1b[?1049h");
+
+            manager.updateOutput("job-a", "fresh\n");
+
+            assert.deepEqual(await screenLines(manager, "job-a"), ["fresh"]);
+        });
+
+        it("appends to a replaced screen instead of resetting it again", async () => {
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            manager.updateOutput("job-a", "abc");
+            manager.appendOutput("job-a", "def");
+
+            assert.deepEqual(await screenLines(manager, "job-a"), ["abcdef"]);
+        });
+
+        it("routes every chunk to its own job's screen", async () => {
+            // Contract: each job owns its emulator, so interleaved streams never mix.
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            startRunningJob(manager, { id: "job-b" });
+
+            manager.appendOutput("job-a", "AAA");
+            manager.appendOutput("job-b", "BBB");
+            manager.appendOutput("job-a", "-more\n");
+            manager.appendOutput("job-b", "-more\n");
+
+            assert.deepEqual(await screenLines(manager, "job-a"), ["AAA-more"]);
+            assert.deepEqual(await screenLines(manager, "job-b"), ["BBB-more"]);
+        });
+
+        it("keeps the screen of a settled job readable", async () => {
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            manager.appendOutput("job-a", "suite 1 ok\n");
+
+            assert.equal(manager.settleJob("job-a", completed(3)), true);
+
+            assert.deepEqual(await screenLines(manager, "job-a"), ["suite 1 ok"]);
+            assert.throws(() => manager.appendOutput("job-a", "late"), /is not running/);
+        });
+
+        it("bounds the screen history while the raw output stays complete", async () => {
+            // Contract: the emulator keeps a bounded window (5000 scrollback lines plus its rows),
+            // while `ShellJob.output` remains the complete text - the difference is the resource
+            // boundary, not a data loss for the reader.
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            const total = 5500;
+            manager.appendOutput("job-a", Array.from({ length: total }, (_, index) => `L${index}`).join("\n"));
+
+            const lines = await screenLines(manager, "job-a");
+
+            assert.equal(lines.at(-1), `L${total - 1}`, "the newest line must be kept");
+            assert.ok(lines.length < total, `the screen must drop its oldest lines, kept ${lines.length}`);
+            assert.ok(lines.length >= 5000, `the screen must keep its documented history, kept ${lines.length}`);
+            assert.notEqual(lines.at(0), "L0", "the dropped lines must be the oldest ones");
+            assert.equal(manager.getJob("job-a")!.output.split("\n").length, total, "the raw output is not trimmed");
+        });
+
+        it("keeps chunk order when output arrives in many small writes", async () => {
+            // xterm parses queued writes asynchronously; the queue must preserve the order.
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            for (let index = 0; index < 500; index++) {
+                manager.appendOutput("job-a", `line ${index}\n`);
+            }
+
+            const lines = await screenLines(manager, "job-a");
+
+            assert.equal(lines.length, 500);
+            assert.equal(lines.at(0), "line 0");
+            assert.equal(lines.at(-1), "line 499");
+        });
+
+        it("rejects an unknown id", () => {
+            assert.throws(() => new ShellManager().getScreenLines("missing"), /Unknown shell job: missing/);
         });
     });
 

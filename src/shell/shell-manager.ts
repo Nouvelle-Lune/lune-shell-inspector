@@ -1,3 +1,23 @@
+import xterm, { type Terminal as XtermTerminal } from "@xterm/headless";
+
+// @xterm/headless ships CommonJS, and its UMD factory hides the exports from Node's
+// named-export detection, so the class has to come off the default import.
+const { Terminal } = xterm;
+
+/**
+ * Geometry of the per-job VT emulator.
+ *
+ * Progress bars, spinners, clear-line and cursor moves only mean something on a screen, so the
+ * raw stream is replayed into a headless terminal and readers get the resulting screen. The
+ * geometry is fixed because the stream comes from a pipe: no program ever saw a window size.
+ */
+const SCREEN_COLS = 120;
+const SCREEN_ROWS = 30;
+/** Bounds the emulator's retained lines; `ShellJob.output` itself is still uncapped. */
+const SCREEN_SCROLLBACK = 5000;
+/** RIS (`ESC c`): a full reset that travels through the emulator's write queue. */
+const SCREEN_RESET = "\x1bc";
+
 export type ShellJobStatus =
     | "running"
     | "completed"
@@ -16,6 +36,9 @@ export interface ShellJob {
     lastActivityAt: number;
 
     output: string;
+
+    /** VT emulator that has executed `output`; read it through `getScreenLines()`. */
+    terminal: XtermTerminal;
 
     exitCode?: number;
     error?: string;
@@ -90,6 +113,7 @@ export class ShellManager {
             startedAt: now,
             lastActivityAt: now,
             output: "",
+            terminal: createScreen(),
             controller: input.controller,
         });
 
@@ -106,6 +130,11 @@ export class ShellManager {
         const runningJobs = this.getRunningJobsList();
         for (const job of runningJobs) {
             job.controller.abort();
+        }
+
+        // Dropping the map alone would leave every emulator and its emitters alive.
+        for (const job of this.jobs.values()) {
+            job.terminal.dispose();
         }
 
         this.jobs.clear();
@@ -134,6 +163,11 @@ export class ShellManager {
         job.output = output;
         job.lastActivityAt = Date.now();
 
+        // The writer replaces the whole text, so the screen is rebuilt from scratch. The reset goes
+        // through the write queue: xterm parses queued writes later, and resetting out of band would
+        // clear the screen before an earlier chunk has been executed on it.
+        job.terminal.write(SCREEN_RESET + output);
+
         this.emit({
             type: "output-updated",
             id: id
@@ -149,10 +183,49 @@ export class ShellManager {
         job.output += chunk;
         job.lastActivityAt = Date.now();
 
+        // xterm parses queued writes on a later tick. Readers render after it: the TUI schedules
+        // its frame through nextTick + setTimeout, while this write is parsed by the first timer.
+        job.terminal.write(chunk);
+
         this.emit({
             type: "output-updated",
             id: id
         });
+    }
+
+    /**
+     * The job's screen as logical lines: the raw output after a terminal executed it.
+     *
+     * A line is only as wide as the program wrote it - continuation rows of a wrapped line are
+     * joined back together - so callers can re-wrap or truncate to their own width.
+     */
+    getScreenLines(id: string): string[] {
+        const buffer = this.requireJob(id).terminal.buffer.active;
+        const lines: string[] = [];
+
+        for (let y = 0; y < buffer.length; y++) {
+            const line = buffer.getLine(y);
+
+            if (!line) {
+                continue;
+            }
+
+            const text = line.translateToString(true);
+
+            // `isWrapped` marks the row the emulator wrapped the previous line onto.
+            if (line.isWrapped) {
+                lines[lines.length - 1] = (lines.at(-1) ?? "") + text;
+            } else {
+                lines.push(text);
+            }
+        }
+
+        // The screen is padded to its full height, so its trailing blank rows are not output.
+        while (lines.length > 0 && (lines.at(-1) ?? "").trim() === "") {
+            lines.pop();
+        }
+
+        return lines;
     }
 
     getJob(id: string): Readonly<ShellJob> | undefined {
@@ -302,6 +375,18 @@ export class ShellManager {
             id: id
         });
     }
+}
+
+function createScreen(): XtermTerminal {
+    return new Terminal({
+        cols: SCREEN_COLS,
+        rows: SCREEN_ROWS,
+        scrollback: SCREEN_SCROLLBACK,
+        // The stream comes from a pipe, so unlike a PTY nothing turns a bare LF into CRLF.
+        convertEol: true,
+        // Reading the framebuffer is still gated behind xterm's proposed API.
+        allowProposedApi: true,
+    });
 }
 
 // Shared singleton: its state outlives extension reloads, which is why the

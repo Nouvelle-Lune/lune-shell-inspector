@@ -75,6 +75,48 @@ export const LONG_RUNNING_FIXTURES: LongRunningFixture[] = [
         },
     },
     {
+        id: "spinner",
+        title: "Spinner that erases and rewrites one line with CSI K, colour and carriage returns",
+        scriptPath: scriptPath("spinner.sh"),
+        command: scriptCommand("spinner.sh"),
+        expectations: {
+            fails: false,
+            truncated: false,
+            outputIncludes: ["spinner: done"],
+            errorIncludes: [],
+            fullOutputIncludes: [],
+            minLines: 2,
+            minDurationMs: 1500,
+            maxDurationMs: 10000,
+        },
+    },
+    {
+        id: "vt-shapes",
+        title: "Every VT shape the inspector renders: redraws, erase-line, cursor moves, SGR, chunks, wide cells",
+        scriptPath: scriptPath("vt-shapes.sh"),
+        command: scriptCommand("vt-shapes.sh"),
+        expectations: {
+            fails: false,
+            truncated: false,
+            // The raw text the foreground row reports: screen-only results (the cursor-up overwrite)
+            // exist only after the terminal executed the stream, so they are not listed here.
+            outputIncludes: [
+                "progress 3%",
+                "cursor-left : abcdef",
+                "cursor-up   : aaaa",
+                "chunked red",
+                "progress 2%",
+                "日本語の進捗テスト: 五割 🚀",
+                "vt-shapes: done",
+            ],
+            errorIncludes: [],
+            fullOutputIncludes: [],
+            minLines: 10,
+            minDurationMs: 3500,
+            maxDurationMs: 15000,
+        },
+    },
+    {
         id: "log-stream",
         title: "Twenty timestamped log lines, one every 100ms",
         scriptPath: scriptPath("log-stream.sh"),

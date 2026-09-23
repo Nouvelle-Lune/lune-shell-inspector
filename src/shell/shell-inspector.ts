@@ -455,7 +455,7 @@ export class ShellInspector implements Component {
             );
         }
 
-        const output = jobOutputLines(job.output);
+        const output = shellManager.getScreenLines(job.id);
 
         // The blank line and the Output header stay fixed, so the scrolling window gets what is
         // left of the body.
@@ -533,7 +533,7 @@ export class ShellInspector implements Component {
             return;
         }
 
-        const lineCount = jobOutputLines(job.output).length;
+        const lineCount = shellManager.getScreenLines(job.id).length;
         const tailStart = Math.max(0, lineCount - this.outputRows);
 
         if (this.outputAnchor === undefined) {
@@ -694,16 +694,4 @@ function formatDuration(ms: number): string {
     }
 
     return `${Math.floor(minutes / 60)}h${minutes % 60}m`;
-}
-
-function jobOutputLines(output: string): string[] {
-    const lines = output.split("\n");
-
-    // Streamed output usually ends with a newline; its empty last line would
-    // otherwise eat a body row and render as a blank branch.
-    while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") {
-        lines.pop();
-    }
-
-    return lines;
 }

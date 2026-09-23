@@ -605,3 +605,21 @@ export async function waitFor(
         await new Promise((resolve) => setTimeout(resolve, 10));
     }
 }
+
+/**
+ * The job's screen once the emulator has executed everything written to it so far.
+ *
+ * Jobs stream raw VT instructions into a headless terminal, which parses queued writes on a later
+ * tick, so a reader that looks at the screen right after a chunk arrived would still see the
+ * previous screen. Flushing through the same queue makes the read deterministic.
+ */
+export async function readJobScreen(jobId: string): Promise<string[]> {
+    const terminal = shellManager.getJob(jobId)?.terminal;
+    if (!terminal) {
+        throw new Error(`cannot read the screen of unknown shell job ${JSON.stringify(jobId)}`);
+    }
+
+    await new Promise<void>((resolve) => terminal.write("", () => resolve()));
+
+    return shellManager.getScreenLines(jobId);
+}
