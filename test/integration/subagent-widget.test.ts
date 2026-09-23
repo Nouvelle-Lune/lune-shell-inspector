@@ -142,7 +142,7 @@ describe("shell dock next to pi-subagents widgets", () => {
             });
             const settled = await waitForJobSettled(jobId);
 
-            assert.equal(settled.output, "line 1\nline 2\nline 3\nline 4\nline 5\n");
+            assert.equal(settled.output.content, "line 1\nline 2\nline 3\nline 4\nline 5\n");
             assert.ok(
                 session.ui.widgetCalls.length - extensionCallBaseline > 2,
                 "expected a re-render per appended chunk",

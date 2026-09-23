@@ -84,9 +84,10 @@ describe("pi-shell-view registration", () => {
     });
 
     it("registers exactly one tool named bash that mirrors the built-in definition", () => {
-        // Contract: loading the extension registers a single tool named "bash" whose label,
-        // description and prompt metadata come from the built-in createBashTool(cwd), so the model
-        // sees the same tool contract and this wrapper cannot drift from it.
+        // Contract: loading the extension registers a single tool named "bash" whose label and
+        // prompt metadata come from the built-in createBashTool(cwd), so the model sees the same
+        // tool contract and this wrapper cannot drift from it. The description is the built-in one
+        // plus the wrapper's own guidance for its background mode.
         const registered = registerExtension(workDir).registeredTools;
         assert.equal(registered.length, 1, "the extension must register exactly one tool");
 
@@ -96,7 +97,15 @@ describe("pi-shell-view registration", () => {
 
         assert.equal(registeredTool.name, "bash", "the tool must be named bash so it replaces the built-in one");
         assert.equal(registeredTool.label, "bash");
-        assert.equal(registeredTool.description, builtIn.description, "description must come from the built-in tool");
+        assert.ok(
+            (registeredTool.description ?? "").startsWith(builtIn.description ?? ""),
+            "the description must extend the built-in one",
+        );
+        assert.match(
+            registeredTool.description ?? "",
+            /normally run in background mode so their output remains observable/,
+            "the wrapper must document its own background mode",
+        );
         assert.equal(registeredTool.promptSnippet, builtIn.promptSnippet, "prompt snippet must come from the built-in tool");
         assert.deepEqual(
             registeredTool.promptGuidelines,

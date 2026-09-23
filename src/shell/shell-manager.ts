@@ -1,8 +1,17 @@
+import { DEFAULT_MAX_LINES, truncateTail } from "@earendil-works/pi-coding-agent";
 import xterm, { type Terminal as XtermTerminal } from "@xterm/headless";
 
 // @xterm/headless ships CommonJS, and its UMD factory hides the exports from Node's
 // named-export detection, so the class has to come off the default import.
 const { Terminal } = xterm;
+
+import {
+    appendFileSync,
+    writeFileSync,
+} from "node:fs";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
 
 /**
  * Geometry of the per-job VT emulator.
@@ -13,10 +22,8 @@ const { Terminal } = xterm;
  */
 const SCREEN_COLS = 120;
 const SCREEN_ROWS = 30;
-/** Bounds the emulator's retained lines; `ShellJob.output` itself is still uncapped. */
-const SCREEN_SCROLLBACK = 5000;
-/** RIS (`ESC c`): a full reset that travels through the emulator's write queue. */
-const SCREEN_RESET = "\x1bc";
+
+const SCREEN_SCROLLBACK = DEFAULT_MAX_LINES;
 
 export type ShellJobStatus =
     | "running"
@@ -35,7 +42,7 @@ export interface ShellJob {
     finishedAt?: number;
     lastActivityAt: number;
 
-    output: string;
+    output: JobOutput;
 
     /** VT emulator that has executed `output`; read it through `getScreenLines()`. */
     terminal: XtermTerminal;
@@ -51,6 +58,23 @@ export interface JobsStatusStat {
     completedCount: number;
     failedCount: number;
     killedCount: number;
+}
+
+/**
+ * Bounded copy of a job's output plus the totals of everything appended so far.
+ *
+ * `content` carries the whole text until it crosses pi's tail limits (2000 lines / 50KB); after
+ * that it keeps the tail only while the complete stream is spilled to `fullOutputPath`.
+ */
+export interface JobOutput {
+    content: string;
+    truncated: boolean;
+
+    /** Newlines appended so far: a final line without a trailing newline is not counted. */
+    totalLines: number;
+    totalBytes: number;
+
+    fullOutputPath?: string;
 }
 
 export type ShellManagerEvent =
@@ -112,7 +136,12 @@ export class ShellManager {
             status: "running",
             startedAt: now,
             lastActivityAt: now,
-            output: "",
+            output: {
+                content: "",
+                truncated: false,
+                totalLines: 0,
+                totalBytes: 0,
+            },
             terminal: createScreen(),
             controller: input.controller,
         });
@@ -149,38 +178,36 @@ export class ShellManager {
         });
     };
 
-    updateOutput(id: string, output: string): void {
-        const job = this.requireJob(id);
-
-        // Only running jobs stream; a late update would overwrite the
-        // authoritative final output.
-        if (job.status !== "running") {
-            throw new Error(
-                `Cannot update output for shell job "${id}" in status "${job.status}"`,
-            );
-        }
-
-        job.output = output;
-        job.lastActivityAt = Date.now();
-
-        // The writer replaces the whole text, so the screen is rebuilt from scratch. The reset goes
-        // through the write queue: xterm parses queued writes later, and resetting out of band would
-        // clear the screen before an earlier chunk has been executed on it.
-        job.terminal.write(SCREEN_RESET + output);
-
-        this.emit({
-            type: "output-updated",
-            id: id
-        });
-    }
-
     appendOutput(
         id: string,
         chunk: string,
     ): void {
         const job = this.getRunningJob(id);
+        const next = job.output.content + chunk;
+        job.output.totalBytes += Buffer.byteLength(chunk);
+        job.output.totalLines += (chunk.match(/\n/g) ?? []).length;
 
-        job.output += chunk;
+        if (job.output.fullOutputPath !== undefined) {
+            appendFileSync(job.output.fullOutputPath, chunk, "utf8");
+
+            job.output.content = truncateTail(next).content;
+        } else {
+            const truncation = truncateTail(next);
+            if (!truncation.truncated) {
+                job.output.content = next;
+            } else {
+                const path = join(
+                    tmpdir(),
+                    `pi-shell-view-bash-${randomUUID()}.log`,
+                );
+                writeFileSync(path, next, "utf8");
+
+                job.output.fullOutputPath = path;
+                job.output.truncated = true;
+                job.output.content = truncation.content;
+            }
+        }
+
         job.lastActivityAt = Date.now();
 
         // xterm parses queued writes on a later tick. Readers render after it: the TUI schedules
@@ -191,6 +218,16 @@ export class ShellManager {
             type: "output-updated",
             id: id
         });
+    }
+
+    getJobOutput(id: string): string {
+        const job = this.requireJob(id);
+
+        if (!job.output.truncated) {
+            return job.output.content;
+        }
+
+        return `[Output truncated. Full output: ${job.output.fullOutputPath ?? "N/A"}]\n${job.output.content}`;
     }
 
     /**

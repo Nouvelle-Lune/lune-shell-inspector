@@ -135,9 +135,9 @@ With `PI_SHELL_VIEW_MODE=background` the same fixture becomes a managed shell jo
 2. `1 running shell · <command> · <Ns> · /shell to open` - the shell dock below the editor, mounted
    under widget key `pi-shell-view` with `placement: "belowEditor"`, with the seconds ticking while
    the command runs.
-3. `1 shell completed in <Ns> · /shell to open` - the same job after it exited. A non-zero exit is
-   still a completed job and carries its exit code; a timeout fails the job and the dock reports it
-   in the count list.
+3. `1 shell completed in <Ns> · /shell to open` - the same job after it exited with code 0. A
+   non-zero exit fails the job with its exit code and reason instead, and the dock reports it in
+   the count list, like a timeout does with its own reason.
 4. `/shell` shows the job's output pane, which grows while the command streams and can be scrolled
    (`⇧↑`/`⇧↓`, `Home`/`End`; the Output header reports `paused ↑N` while the newest line is out of
    view).

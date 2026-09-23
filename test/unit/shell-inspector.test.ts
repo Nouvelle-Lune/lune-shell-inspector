@@ -59,16 +59,16 @@ function lineOutput(count: number): string {
     return Array.from({ length: count }, (_, index) => `line ${index + 1}`).join("\n");
 }
 
-/** Replace a job's output and wait until the emulator has executed it. */
-async function replaceOutput(id: string, output: string): Promise<void> {
-    shellManager.updateOutput(id, output);
+/** Write a job's output and wait until the emulator has executed it. */
+async function writeOutput(id: string, output: string): Promise<void> {
+    shellManager.appendOutput(id, output);
     await readJobScreen(id);
 }
 
 /** Add a running job whose output is already complete for the purposes of rendering. */
 async function addJob(id: string, command: string, output: string): Promise<void> {
     shellManager.startJob({ id, command, cwd: "/work", controller: new AbortController() });
-    await replaceOutput(id, output);
+    await writeOutput(id, output);
 }
 
 /** The right pane of one rendered line; empty for the separator and border lines. */
@@ -226,7 +226,7 @@ describe("shell inspector", () => {
         assert.equal(pausedMarker(), undefined);
         assert.equal(visibleOutput().at(-1), "line 40");
 
-        await replaceOutput("job-1", lineOutput(41));
+        await writeOutput("job-1", "\nline 41");
 
         assert.equal(visibleOutput().at(-1), "line 41", "following means new output moves the pane");
     });
@@ -238,7 +238,7 @@ describe("shell inspector", () => {
         press(SHIFT_UP);
         const paused = visibleOutput();
 
-        await replaceOutput("job-1", lineOutput(41));
+        await writeOutput("job-1", "\nline 41");
 
         assert.deepEqual(visibleOutput(), paused, "a paused pane must not drift with the tail");
         assert.equal(pausedMarker(), " · paused ↑3");

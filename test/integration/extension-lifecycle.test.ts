@@ -201,7 +201,7 @@ describe("pi-shell-view session lifecycle", () => {
 
                 const settled = await waitForJobSettled(jobId);
 
-                assert.equal(settled.output, "hi\n");
+                assert.equal(settled.output.content, "hi\n");
                 assert.match(dockText(session.ui) ?? "", /^1 shell completed in \d+s · \/shell to open$/);
             });
         });
@@ -219,7 +219,7 @@ describe("pi-shell-view session lifecycle", () => {
 
                 const settled = await waitForJobSettled(jobId);
 
-                assert.equal(settled.output, "one\ntwo\nthree\n");
+                assert.equal(settled.output.content, "one\ntwo\nthree\n");
                 assert.ok(
                     dockCalls(session.ui) > callsAfterStart,
                     "expected the streamed chunks to re-render the dock",

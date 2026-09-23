@@ -108,8 +108,8 @@ What to watch for in a fixture run ("npm run tui:demo -- <id>" or PI_SHELL_VIEW_
 foreground (the default) draws the "$ <command>" row pi streams and settles - success, truncation
 warning or the failure text for a failing fixture - with no dock entry. With
 PI_SHELL_VIEW_MODE=background the same fixture runs as a managed shell job instead: the transcript
-row stays empty, the dock reports the job, and /shell shows it. A non-zero exit is a completed job
-carrying its exit code; a timeout fails the job.
+row stays empty, the dock reports the job, and /shell shows it. A non-zero exit fails the job
+carrying its exit code, like a timeout does with its own reason.
 
 What to watch for in the shelldocksum scenario: the dock below the editor walks through its summary
 shapes without any keyboard input - "1 running shell · <command> · <Ns> · /shell to open" with the

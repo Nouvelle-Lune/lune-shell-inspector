@@ -175,6 +175,7 @@ describe("pi-shell-view bash delegation", () => {
         // Contract: the dock only observes background shells. A foreground call must leave the job
         // list empty and must not re-render the mounted widget, no matter how much output streams.
         const widgetCallsBefore = session.ui.widgetCalls.length;
+        const notificationsBefore = session.host.sendMessageCalls.length;
 
         const run = await runBashCommand(session.tool, {
             command: "printf 'one\\n'; sleep 0.2; printf 'two\\n'",
@@ -185,6 +186,11 @@ describe("pi-shell-view bash delegation", () => {
         assert.equal(run.failed, false, `expected the call to succeed: ${run.error?.message ?? ""}`);
         assert.deepEqual(shellManager.getAllJobsList(), [], "a foreground call must not be recorded as a job");
         assert.equal(session.ui.widgetCalls.length, widgetCallsBefore, "the dock must not react to a foreground call");
+        assert.equal(
+            session.host.sendMessageCalls.length,
+            notificationsBefore,
+            "a foreground call must not notify the agent",
+        );
     });
 
     it("fails before recording anything when pi passes no extension context", async () => {

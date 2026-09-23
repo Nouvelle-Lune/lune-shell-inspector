@@ -4,15 +4,18 @@
  * The manager is the model behind the shell dock: every background shell is one job, and jobs move
  * from `running` to exactly one settled status through the single public entry point `settleJob`.
  * The tests lock the observable contract - job fields and their timestamps, the controller a job
- * owns, the two output writers (`appendOutput` for the raw chunks the background runner streams,
- * `updateOutput` for callers that replace the whole text), the screen every job exposes to readers
+ * owns, the output writer (`appendOutput` streams raw chunks, keeps a bounded tail and spills the
+ * complete stream to a file), the screen every job exposes to readers
  * (`getScreenLines` returns the output after a headless terminal executed it), the outcome each settle accepts, the
  * idempotence of settling (a job that is unknown or already settled is refused without an event or
  * a counter change), the per-status counters, and the notification semantics (synchronous, once
  * per mutation, unsubscribe-able) including the behaviour of a subscriber that throws.
  */
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import { afterEach, describe, it } from "node:test";
+
+import { DEFAULT_MAX_LINES, truncateTail } from "@earendil-works/pi-coding-agent";
 
 import {
     ShellManager,
@@ -71,7 +74,7 @@ describe("ShellManager", () => {
             assert.equal(job.command, "npm test");
             assert.equal(job.cwd, "/work");
             assert.equal(job.status, "running");
-            assert.equal(job.output, "");
+            assert.equal(job.output.content, "");
             assert.equal(job.finishedAt, undefined);
             assert.equal(job.exitCode, undefined);
             assert.equal(job.error, undefined);
@@ -121,7 +124,7 @@ describe("ShellManager", () => {
             const job = manager.getJob("job-a");
             assert.ok(job);
             assert.equal(job.status, "completed");
-            assert.equal(job.output, "line 1\n", "settling must keep the streamed output");
+            assert.equal(job.output.content, "line 1\n", "settling must keep the streamed output");
             assert.equal(job.exitCode, 0);
             assert.equal(job.startedAt, startedAt);
             assert.ok(job.finishedAt !== undefined && job.finishedAt >= job.startedAt);
@@ -129,19 +132,29 @@ describe("ShellManager", () => {
             assert.equal(job.error, undefined);
         });
 
-        it("records a non-zero exit code as data on a completed job", () => {
-            // Contract: the local bash operations resolve with the exit code of a finished process;
-            // a non-zero code is recorded on the completed job, not turned into a failure.
+        it("records the outcome it is told without interpreting the exit code", () => {
+            // Contract: classifying a process result is the runner's job. The manager stores a
+            // completed outcome with a non-zero code and a failed outcome with one exactly as given.
             const manager = new ShellManager();
             startRunningJob(manager, { id: "job-a" });
 
             assert.equal(manager.settleJob("job-a", completed(3)), true);
 
-            const job = manager.getJob("job-a");
-            assert.ok(job);
-            assert.equal(job.status, "completed");
-            assert.equal(job.exitCode, 3);
-            assert.equal(job.error, undefined);
+            const completedJob = manager.getJob("job-a");
+            assert.ok(completedJob);
+            assert.equal(completedJob.status, "completed");
+            assert.equal(completedJob.exitCode, 3);
+            assert.equal(completedJob.error, undefined);
+
+            startRunningJob(manager, { id: "job-b" });
+
+            assert.equal(manager.settleJob("job-b", failed("Background shell exited with code 3", 3)), true);
+
+            const failedJob = manager.getJob("job-b");
+            assert.ok(failedJob);
+            assert.equal(failedJob.status, "failed");
+            assert.equal(failedJob.exitCode, 3);
+            assert.equal(failedJob.error, "Background shell exited with code 3");
         });
 
         it("leaves exitCode undefined for a completion without one", () => {
@@ -167,7 +180,7 @@ describe("ShellManager", () => {
             assert.equal(job.status, "failed");
             assert.equal(job.error, "Command exited with code 3");
             assert.equal(job.exitCode, 3);
-            assert.equal(job.output, "partial output", "a failure must not discard the streamed output");
+            assert.equal(job.output.content, "partial output", "a failure must not discard the streamed output");
             assert.ok(job.finishedAt !== undefined);
             assert.equal(job.lastActivityAt, job.finishedAt);
         });
@@ -200,7 +213,7 @@ describe("ShellManager", () => {
             assert.equal(job.error, "timeout:1");
             assert.equal(job.exitCode, undefined);
             assert.equal(controller.signal.aborted, true, "killing a job must abort its controller");
-            assert.equal(job.output, "before kill", "a kill must not discard the streamed output");
+            assert.equal(job.output.content, "before kill", "a kill must not discard the streamed output");
             assert.ok(job.finishedAt !== undefined);
             assert.equal(job.lastActivityAt, job.finishedAt);
         });
@@ -329,64 +342,6 @@ describe("ShellManager", () => {
         });
     });
 
-    describe("updateOutput", () => {
-        it("replaces the streamed output and bumps the activity timestamp", () => {
-            // Contract: snapshots are cumulative and overwrite the previous text; only the activity
-            // timestamp moves, so a running job keeps its creation time.
-            const manager = new ShellManager();
-            startRunningJob(manager, { id: "job-a" });
-            const startedAt = manager.getJob("job-a")?.startedAt;
-
-            manager.updateOutput("job-a", "line 1\n");
-            const firstActivity = manager.getJob("job-a")?.lastActivityAt;
-            manager.updateOutput("job-a", "line 1\nline 2\n");
-
-            const job = manager.getJob("job-a");
-            assert.ok(job);
-            assert.equal(job.output, "line 1\nline 2\n");
-            assert.equal(job.status, "running");
-            assert.equal(job.startedAt, startedAt);
-            assert.ok(firstActivity !== undefined && job.lastActivityAt >= firstActivity);
-            assert.equal(job.finishedAt, undefined, "streaming output must not finish the job");
-        });
-
-        it("notifies subscribers once per update", () => {
-            const manager = new ShellManager();
-            startRunningJob(manager, { id: "job-a" });
-            const seen: string[] = [];
-            manager.subscribe(() => {
-                seen.push("notified");
-            });
-
-            manager.updateOutput("job-a", "one");
-            manager.updateOutput("job-a", "one\ntwo");
-
-            assert.deepEqual(seen, ["notified", "notified"]);
-        });
-
-        it("rejects an unknown id and a job that already finished", () => {
-            // Contract: updateOutput is a running-only operation, so a late snapshot cannot overwrite
-            // the settled result.
-            const manager = new ShellManager();
-            assert.throws(() => manager.updateOutput("missing", "output"), /Unknown shell job: missing/);
-
-            startRunningJob(manager, { id: "completed" });
-            manager.settleJob("completed", completed(0));
-            startRunningJob(manager, { id: "failed" });
-            manager.settleJob("failed", failed("boom"));
-            startRunningJob(manager, { id: "killed" });
-            manager.settleJob("killed", killed("timeout:1"));
-
-            assert.throws(
-                () => manager.updateOutput("completed", "late"),
-                /Cannot update output for shell job "completed" in status "completed"/,
-            );
-            assert.throws(() => manager.updateOutput("failed", "late"), /in status "failed"/);
-            assert.throws(() => manager.updateOutput("killed", "late"), /in status "killed"/);
-            assert.equal(manager.getJob("completed")?.output, "");
-        });
-    });
-
     describe("appendOutput", () => {
         it("concatenates chunks in arrival order and bumps the activity timestamp", () => {
             // Contract: the background runner streams raw chunks, so appendOutput must grow the
@@ -402,7 +357,7 @@ describe("ShellManager", () => {
 
             const job = manager.getJob("job-a");
             assert.ok(job);
-            assert.equal(job.output, "chunk 1\nchunk 2\nchunk 3");
+            assert.equal(job.output.content, "chunk 1\nchunk 2\nchunk 3");
             assert.equal(job.status, "running");
             assert.equal(job.startedAt, startedAt);
             assert.ok(firstActivity !== undefined && job.lastActivityAt >= firstActivity);
@@ -416,7 +371,7 @@ describe("ShellManager", () => {
 
             manager.appendOutput("job-a", "");
 
-            assert.equal(manager.getJob("job-a")?.output, "kept");
+            assert.equal(manager.getJob("job-a")?.output.content, "kept");
         });
 
         it("notifies subscribers once per chunk", () => {
@@ -433,21 +388,272 @@ describe("ShellManager", () => {
             assert.deepEqual(seen, ["notified", "notified"]);
         });
 
-        it("rejects an unknown id and a job that already finished", () => {
-            // Contract: appendOutput is the running-only writer, so late chunks cannot corrupt a
-            // settled job's final output.
+        it("rejects an unknown id and every settled job", () => {
+            // Contract: appendOutput is the running-only writer, so a late chunk cannot corrupt a
+            // settled job's final output - whichever outcome settled it.
             const manager = new ShellManager();
             assert.throws(() => manager.appendOutput("missing", "late"), /Unknown shell job: missing/);
 
             startRunningJob(manager, { id: "completed" });
             manager.appendOutput("completed", "final");
             manager.settleJob("completed", completed(0));
+            startRunningJob(manager, { id: "failed" });
+            manager.settleJob("failed", failed("boom"));
+            startRunningJob(manager, { id: "killed" });
+            manager.settleJob("killed", killed("timeout:1"));
 
             assert.throws(
                 () => manager.appendOutput("completed", "late"),
                 /Shell job "completed" is not running: completed/,
             );
-            assert.equal(manager.getJob("completed")?.output, "final");
+            assert.throws(
+                () => manager.appendOutput("failed", "late"),
+                /Shell job "failed" is not running: failed/,
+            );
+            assert.throws(
+                () => manager.appendOutput("killed", "late"),
+                /Shell job "killed" is not running: killed/,
+            );
+            assert.equal(manager.getJob("completed")?.output.content, "final");
+            assert.equal(manager.getJob("failed")?.output.content, "");
+            assert.equal(manager.getJob("killed")?.output.content, "");
+        });
+    });
+
+    describe("output retention", () => {
+        /** Spill files created by the current test, removed afterwards. */
+        const spillPaths: string[] = [];
+
+        afterEach(() => {
+            for (const path of spillPaths.splice(0)) {
+                rmSync(path, { force: true });
+            }
+        });
+
+        /** The job's spill file, tracked for cleanup. */
+        function spillPath(manager: ShellManager, id: string): string {
+            const path = manager.getJob(id)?.output.fullOutputPath;
+            assert.ok(path, `expected job ${id} to have spilled its output`);
+            spillPaths.push(path);
+            return path;
+        }
+
+        /** A stream long enough to cross the line limit but far below the byte limit. */
+        function longStream(lines: number): string {
+            return Array.from({ length: lines }, (_, index) => `L${index}`).join("\n");
+        }
+
+        it("keeps a small output in memory without spilling", () => {
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+
+            manager.appendOutput("job-a", "one\n");
+            manager.appendOutput("job-a", "two\n");
+
+            const job = manager.getJob("job-a")!;
+            assert.equal(job.output.content, "one\ntwo\n");
+            assert.equal(job.output.truncated, false);
+            assert.equal(job.output.fullOutputPath, undefined);
+        });
+
+        it("concatenates chunks exactly as they arrive, across chunk boundaries", () => {
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+
+            manager.appendOutput("job-a", "line 1");
+            manager.appendOutput("job-a", "\nline ");
+            manager.appendOutput("job-a", "2\nline 3");
+
+            assert.equal(manager.getJob("job-a")!.output.content, "line 1\nline 2\nline 3");
+        });
+
+        it("counts totalBytes in UTF-8 bytes, not in string length", () => {
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            const chunks = ["ascii\n", "中文\n", "🚀\n"];
+
+            for (const chunk of chunks) {
+                manager.appendOutput("job-a", chunk);
+            }
+
+            const job = manager.getJob("job-a")!;
+            const full = chunks.join("");
+
+            assert.equal(job.output.content, full);
+            assert.equal(job.output.totalBytes, Buffer.byteLength(full));
+            assert.notEqual(job.output.totalBytes, full.length, "multibyte chunks must differ from code-unit length");
+        });
+
+        it("counts totalLines as newlines, across chunks and without a trailing newline", () => {
+            // Contract: the field is a newline counter, not a display line count - the last line of a
+            // stream that does not end in "\n" is not counted.
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+
+            manager.appendOutput("job-a", "line 1\nline 2\n");
+            assert.equal(manager.getJob("job-a")!.output.totalLines, 2, "one newline per terminated line");
+
+            manager.appendOutput("job-a", "still line 2");
+            assert.equal(manager.getJob("job-a")!.output.totalLines, 2, "a line split across chunks counts once");
+
+            manager.appendOutput("job-a", "\nlast line without break");
+            assert.equal(manager.getJob("job-a")!.output.totalLines, 3, "the unterminated last line is not counted");
+        });
+
+        it("spills on the chunk that first crosses pi's limits", () => {
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            const head = longStream(DEFAULT_MAX_LINES);
+
+            manager.appendOutput("job-a", head);
+            assert.equal(manager.getJob("job-a")!.output.truncated, false, "exactly at the line limit is not truncated");
+            assert.equal(manager.getJob("job-a")!.output.fullOutputPath, undefined, "no file before the limit is crossed");
+
+            manager.appendOutput("job-a", "\noverflow");
+            const job = manager.getJob("job-a")!;
+            const path = spillPath(manager, "job-a");
+            const full = `${head}\noverflow`;
+
+            assert.equal(job.output.truncated, true);
+            assert.equal(job.output.fullOutputPath, path, "the job keeps the file it created");
+            assert.equal(readFileSync(path, "utf8"), full, "the spill file starts with everything appended so far");
+            assert.equal(job.output.content, truncateTail(full).content, "the retained tail matches pi's truncation");
+            assert.equal(job.output.totalLines, full.match(/\n/g)!.length);
+            assert.equal(job.output.totalBytes, Buffer.byteLength(full));
+        });
+
+        it("appends every later chunk to the same file instead of spilling again", () => {
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            const first = longStream(DEFAULT_MAX_LINES + 1);
+            manager.appendOutput("job-a", first);
+            const path = spillPath(manager, "job-a");
+
+            manager.appendOutput("job-a", "\ntail 1");
+            manager.appendOutput("job-a", "\ntail 2");
+
+            const job = manager.getJob("job-a")!;
+            const full = `${first}\ntail 1\ntail 2`;
+
+            assert.equal(job.output.fullOutputPath, path, "the file must not be replaced");
+            assert.equal(readFileSync(path, "utf8"), full, "the file must grow with every chunk");
+            assert.equal(job.output.content, truncateTail(full).content, "memory keeps only the bounded tail");
+            assert.ok(!job.output.content.includes("L0\n"), "the dropped head must not stay in memory");
+        });
+
+        it("retains exactly pi's tail truncation at the line limit", () => {
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            const full = longStream(DEFAULT_MAX_LINES + 500);
+
+            manager.appendOutput("job-a", full);
+
+            const job = manager.getJob("job-a")!;
+            const expected = truncateTail(full);
+            spillPath(manager, "job-a");
+
+            assert.equal(expected.truncatedBy, "lines", "guard: this stream must cross the line limit first");
+            assert.equal(job.output.content, expected.content);
+            assert.equal(job.output.content.split("\n").length, DEFAULT_MAX_LINES);
+        });
+
+        it("spills on the byte limit even when the line count stays far below the line limit", () => {
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            // 200 lines x 120 CJK characters: ~72KB of UTF-8 in only 200 lines.
+            const full = Array.from({ length: 200 }, () => "中".repeat(120)).join("\n");
+            assert.ok(full.split("\n").length < DEFAULT_MAX_LINES, "guard: the line limit must not be the trigger");
+
+            manager.appendOutput("job-a", full);
+
+            const job = manager.getJob("job-a")!;
+            const expected = truncateTail(full);
+            const path = spillPath(manager, "job-a");
+
+            assert.equal(expected.truncatedBy, "bytes", "guard: the byte limit must be the trigger");
+            assert.equal(job.output.truncated, true);
+            assert.equal(job.output.content, expected.content);
+            assert.equal(job.output.totalBytes, Buffer.byteLength(full));
+            assert.equal(readFileSync(path, "utf8"), full);
+        });
+
+        it("writes a post-spill chunk to the file even when the retained tail does not change", () => {
+            // Regression: once spilled, the file is the record - every chunk must reach it whether or
+            // not truncateTail() would report a new truncation for that chunk.
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            manager.appendOutput("job-a", longStream(DEFAULT_MAX_LINES + 500));
+            const path = spillPath(manager, "job-a");
+
+            manager.appendOutput("job-a", "empty chunk ignored");
+            const before = statSync(path).size;
+            manager.appendOutput("job-a", "yz");
+
+            assert.equal(statSync(path).size, before + 2, "every chunk must be appended verbatim");
+            assert.ok(readFileSync(path, "utf8").endsWith("yz"));
+        });
+
+        it("returns the plain content when nothing was dropped", () => {
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            manager.appendOutput("job-a", "hello\nworld\n");
+
+            assert.equal(manager.getJobOutput("job-a"), "hello\nworld\n");
+        });
+
+        it("returns the bounded tail behind a spill banner when output was truncated", () => {
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            const full = longStream(DEFAULT_MAX_LINES + 500);
+            manager.appendOutput("job-a", full);
+            const path = spillPath(manager, "job-a");
+
+            const reported = manager.getJobOutput("job-a");
+            const lines = reported.split("\n");
+
+            assert.equal(lines.at(0), `[Output truncated. Full output: ${path}]`);
+            assert.equal(lines.at(1), `L${full.split("\n").length - DEFAULT_MAX_LINES}`, "the tail starts at the retained line");
+            assert.equal(lines.at(-1), `L${full.split("\n").length - 1}`, "the newest line must reach the reader");
+            assert.ok(!reported.includes("[object Object]"), "the structured output must be rendered, not stringified");
+        });
+
+        it("reports an empty string for a job that never received a chunk", () => {
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            manager.settleJob("job-a", completed(0));
+
+            assert.equal(manager.getJobOutput("job-a"), "");
+            assert.equal(manager.getJob("job-a")!.output.fullOutputPath, undefined);
+        });
+
+        it("gives each spilled job its own file", () => {
+            const manager = new ShellManager();
+            const full = longStream(DEFAULT_MAX_LINES + 500);
+            startRunningJob(manager, { id: "job-a" });
+            startRunningJob(manager, { id: "job-b" });
+
+            manager.appendOutput("job-a", full);
+            manager.appendOutput("job-b", `${full}\nB`);
+
+            const a = spillPath(manager, "job-a");
+            const b = spillPath(manager, "job-b");
+
+            assert.notEqual(a, b);
+            assert.equal(readFileSync(a, "utf8"), full);
+            assert.equal(readFileSync(b, "utf8"), `${full}\nB`);
+        });
+
+        it("leaves spill files on disk when the jobs are cleared", () => {
+            // Contract: clearAllJobs() drops the jobs and disposes their emulators; it does not delete
+            // the spill files a reader may still open.
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            manager.appendOutput("job-a", longStream(DEFAULT_MAX_LINES + 1));
+            const path = spillPath(manager, "job-a");
+
+            manager.clearAllJobs();
+
+            assert.equal(existsSync(path), true, "clearing the jobs must not delete the spill file");
         });
     });
 
@@ -583,35 +789,22 @@ describe("ShellManager", () => {
             assert.deepEqual(await screenLines(manager, "job-a"), ["first", "", "second"]);
         });
 
-        it("rebuilds the screen when a caller replaces the whole output", async () => {
+        it("keeps the raw stream on the screen no matter what the retained tail drops", async () => {
+            // Contract: the emulator executes every chunk as it arrives, so the screen is not a replay
+            // of `output.content` - the screen keeps lines the bounded tail has already dropped.
             const manager = new ShellManager();
             startRunningJob(manager, { id: "job-a" });
-            manager.appendOutput("job-a", "old\n");
-            manager.updateOutput("job-a", "new\n");
+            const total = 5500;
+            manager.appendOutput("job-a", Array.from({ length: total }, (_, index) => `L${index}`).join("\n"));
 
-            assert.deepEqual(await screenLines(manager, "job-a"), ["new"]);
-        });
+            const lines = await screenLines(manager, "job-a");
+            const job = manager.getJob("job-a")!;
 
-        it("wipes cursor, colour and alternate-screen state when the output is replaced", async () => {
-            // Contract: the replacement is a full reset, so nothing the previous text did to the
-            // screen survives it - not its history, its cursor, its style or its alt buffer.
-            const manager = new ShellManager();
-            startRunningJob(manager, { id: "job-a" });
-            manager.appendOutput("job-a", Array.from({ length: 40 }, (_, index) => `old ${index}`).join("\n"));
-            manager.appendOutput("job-a", "\x1b[31mred\x1b[10;10Hmoved\x1b[?1049h");
-
-            manager.updateOutput("job-a", "fresh\n");
-
-            assert.deepEqual(await screenLines(manager, "job-a"), ["fresh"]);
-        });
-
-        it("appends to a replaced screen instead of resetting it again", async () => {
-            const manager = new ShellManager();
-            startRunningJob(manager, { id: "job-a" });
-            manager.updateOutput("job-a", "abc");
-            manager.appendOutput("job-a", "def");
-
-            assert.deepEqual(await screenLines(manager, "job-a"), ["abcdef"]);
+            assert.equal(lines.at(-1), `L${total - 1}`);
+            assert.ok(
+                lines.length > job.output.content.split("\n").length,
+                "the screen must reach lines the retained tail dropped",
+            );
         });
 
         it("routes every chunk to its own job's screen", async () => {
@@ -640,22 +833,33 @@ describe("ShellManager", () => {
             assert.throws(() => manager.appendOutput("job-a", "late"), /is not running/);
         });
 
-        it("bounds the screen history while the raw output stays complete", async () => {
-            // Contract: the emulator keeps a bounded window (5000 scrollback lines plus its rows),
-            // while `ShellJob.output` remains the complete text - the difference is the resource
-            // boundary, not a data loss for the reader.
+        it("bounds the screen history and the retained tail while the complete stream is spilled", async () => {
+            // Contract: two independent limits - the emulator keeps a bounded window (5000 scrollback
+            // lines plus its rows), while `output.content` keeps only pi's tail limits and the whole
+            // stream goes to `fullOutputPath`.
             const manager = new ShellManager();
             startRunningJob(manager, { id: "job-a" });
             const total = 5500;
-            manager.appendOutput("job-a", Array.from({ length: total }, (_, index) => `L${index}`).join("\n"));
+            const full = Array.from({ length: total }, (_, index) => `L${index}`).join("\n");
+            manager.appendOutput("job-a", full);
 
             const lines = await screenLines(manager, "job-a");
+            const job = manager.getJob("job-a")!;
 
             assert.equal(lines.at(-1), `L${total - 1}`, "the newest line must be kept");
             assert.ok(lines.length < total, `the screen must drop its oldest lines, kept ${lines.length}`);
-            assert.ok(lines.length >= 5000, `the screen must keep its documented history, kept ${lines.length}`);
+            assert.ok(
+                lines.length > DEFAULT_MAX_LINES && lines.length <= DEFAULT_MAX_LINES + 50,
+                `the screen must keep its bounded scrollback plus its rows, kept ${lines.length}`,
+            );
             assert.notEqual(lines.at(0), "L0", "the dropped lines must be the oldest ones");
-            assert.equal(manager.getJob("job-a")!.output.split("\n").length, total, "the raw output is not trimmed");
+
+            assert.equal(job.output.truncated, true);
+            assert.equal(job.output.content.split("\n").length, DEFAULT_MAX_LINES, "the retained tail is bounded");
+            assert.equal(job.output.totalLines, total - 1, "the totals still count the whole stream");
+            assert.equal(readFileSync(job.output.fullOutputPath!, "utf8"), full, "the spill file holds every byte");
+
+            rmSync(job.output.fullOutputPath!, { force: true });
         });
 
         it("keeps chunk order when output arrives in many small writes", async () => {
@@ -765,9 +969,9 @@ describe("ShellManager", () => {
             startRunningJob(manager, { id: "job-a" });
 
             const job = manager.getJob("job-a") as ShellJob;
-            job.output = "written through the reference";
+            job.output.content = "written through the reference";
 
-            assert.equal(manager.getAllJobsList().at(0)?.output, "written through the reference");
+            assert.equal(manager.getAllJobsList().at(0)?.output.content, "written through the reference");
         });
     });
 

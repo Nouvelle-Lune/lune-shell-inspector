@@ -14,7 +14,8 @@ const backgroundOps = createLocalBashOperations();
  * Start a managed background shell and return before the command finishes.
  *
  * The tool call answers immediately; the detached execution below appends output to the job and
- * settles it once the process exits or the execution fails.
+ * settles it once the process ends - completed only on exit code 0, failed with the code and reason
+ * on any other exit - or the execution itself fails.
  */
 export function startBackgroundShell(
     toolCallId: string,
@@ -48,9 +49,18 @@ export function startBackgroundShell(
             },
         })
         .then(({ exitCode }) => {
+            if (exitCode === 0) {
+                shellManager.settleJob(toolCallId, {
+                    type: "completed",
+                    exitCode: exitCode ?? undefined,
+                });
+                return;
+            }
+            const errorMessage = `Background shell exited with code ${exitCode ?? "unknown"}`;
             shellManager.settleJob(toolCallId, {
-                type: "completed",
+                type: "failed",
                 exitCode: exitCode ?? undefined,
+                error: errorMessage,
             });
             return;
         })

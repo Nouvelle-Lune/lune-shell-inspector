@@ -137,6 +137,20 @@ export interface NotifyCall {
     type: string | undefined;
 }
 
+/** One captured `pi.sendMessage` call, in call order. */
+export interface SendMessageCall {
+    message: {
+        customType: string;
+        content: unknown;
+        display?: boolean;
+        details?: unknown;
+    };
+    options?: {
+        triggerTurn?: boolean;
+        deliverAs?: "steer" | "followUp" | "nextTurn";
+    };
+}
+
 /** One captured `theme.fg` request, in call order. */
 export interface ThemeFgCall {
     color: string;
@@ -258,6 +272,8 @@ export type PiEventHandler = (event: unknown, ctx: ExtensionContext, ...rest: un
 export interface FakePiHost {
     readonly registeredTools: readonly BashToolDefinition[];
     readonly registeredCommands: readonly RegisteredCommand[];
+    /** Custom messages the extension sent to the session, in call order. */
+    readonly sendMessageCalls: readonly SendMessageCall[];
     /** Fire one extension event with the given context, awaiting every handler. */
     emit(event: PiEventName, ctx: ExtensionContext): Promise<void>;
     /** Currently registered handlers for an event, in registration order. */
@@ -282,6 +298,7 @@ export function registerExtension(cwd: string): FakePiHost {
     const previousCwd = process.cwd();
     const registeredTools: BashToolDefinition[] = [];
     const registeredCommands: RegisteredCommand[] = [];
+    const sendMessageCalls: SendMessageCall[] = [];
     const handlersByEvent = new Map<PiEventName, PiEventHandler[]>();
 
     const api = {
@@ -297,6 +314,9 @@ export function registerExtension(cwd: string): FakePiHost {
                 description: options.description,
                 handler: options.handler,
             });
+        },
+        sendMessage: (message: SendMessageCall["message"], options?: SendMessageCall["options"]) => {
+            sendMessageCalls.push({ message, options });
         },
         on: (event: PiEventName, handler: PiEventHandler) => {
             const handlers = handlersByEvent.get(event) ?? [];
@@ -325,6 +345,7 @@ export function registerExtension(cwd: string): FakePiHost {
     return {
         registeredTools,
         registeredCommands,
+        sendMessageCalls,
         handlers: (event) => handlersByEvent.get(event) ?? [],
         async emit(event, ctx) {
             for (const handler of handlersByEvent.get(event) ?? []) {
@@ -562,7 +583,7 @@ export function waitForJobSettled(
                 reject(
                     new Error(
                         `shell job ${JSON.stringify(jobId)} did not settle within ${timeoutMs}ms ` +
-                        `(status ${JSON.stringify(job?.status)}, output ${JSON.stringify(job?.output ?? "")})`,
+                        `(status ${JSON.stringify(job?.status)}, output ${JSON.stringify(job?.output.content ?? "")})`,
                     ),
                 ),
             );

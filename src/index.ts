@@ -6,11 +6,15 @@ import { shellManager } from "./shell/shell-manager.ts"
 
 import { openShellInspector } from "./shell/shell-inspector.ts";
 
-import { BashTool } from "./tools/bash-tool.ts";
+import { BashTool, registerBackgroundShellNotifications } from "./tools/bash-tool.ts";
 
 export default function (pi: ExtensionAPI): void {
 
     let unsubscribeShellManager:
+        | (() => void)
+        | undefined;
+
+    let unsubscribeBackgroundShellNotifications:
         | (() => void)
         | undefined;
 
@@ -30,6 +34,11 @@ export default function (pi: ExtensionAPI): void {
                 shellDock.render();
             });
 
+        unsubscribeBackgroundShellNotifications?.();
+
+        // Register background shell notifications
+        unsubscribeBackgroundShellNotifications = registerBackgroundShellNotifications(pi);
+
         shellDock.render();
     });
 
@@ -39,6 +48,8 @@ export default function (pi: ExtensionAPI): void {
         unsubscribeShellManager?.();
         unsubscribeShellManager = undefined;
         shellDock.clear();
+        unsubscribeBackgroundShellNotifications?.();
+        unsubscribeBackgroundShellNotifications = undefined;
         shellManager.clearAllJobs();
     });
 
