@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { shellManager } from "../../src/shell/shell-manager.ts";
-import { registerBackgroundShellNotifications } from "../../src/tools/bash-tool.ts";
+import { registerBackgroundShellNotifications } from "../../src/shell/shell-notification.ts";
 import {
     createFakeContext,
     createFakeUi,

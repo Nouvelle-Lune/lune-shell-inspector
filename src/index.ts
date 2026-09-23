@@ -6,7 +6,8 @@ import { shellManager } from "./shell/shell-manager.ts"
 
 import { openShellInspector } from "./shell/shell-inspector.ts";
 
-import { BashTool, registerBackgroundShellNotifications } from "./tools/bash-tool.ts";
+import { BashTool } from "./tools/bash-tool.ts";
+import { registerBackgroundShellNotifications } from "./shell/shell-notification.ts";
 
 export default function (pi: ExtensionAPI): void {
 
