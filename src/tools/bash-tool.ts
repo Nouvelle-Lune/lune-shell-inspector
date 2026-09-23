@@ -33,6 +33,10 @@ export function BashTool() {
     // contract the model sees cannot drift from the built-in one.
     const baseBash = createBashToolDefinition(process.cwd());
 
+    const description =
+        baseBash.description +
+        ` Long-running commands should emit meaningful periodic progress to stdout or stderr ` +
+        `and normally run in background mode so their output remains observable for user.`;
     const parameters = Type.Object({
         ...baseBash.parameters.properties,
         mode: Type.Optional(
@@ -41,9 +45,8 @@ export function BashTool() {
                 Type.Literal("background"),
             ], {
                 description:
-                    'Execution mode. Use "foreground" when the command result, output, or exit status is needed before continuing. ' +
-                    'Use "background" only for commands that may continue independently; the tool returns immediately and the shell is managed as a background job. ' +
-                    'Omit this field to use "foreground".',
+                    `"foreground" waits for completion; use it when the result is needed before continuing. ` +
+                    `"background" keeps long-running, progress-producing commands observable while the agent continues.`,
                 default: "foreground",
             }),
         )
@@ -51,6 +54,7 @@ export function BashTool() {
 
     return defineTool({
         ...baseBash,
+        description,
         parameters,
 
         renderCall(args, theme, context) {
