@@ -29,7 +29,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createBashTool, createBashToolDefinition } from "@earendil-works/pi-coding-agent";
+import {
+    SessionManager,
+    createBashTool,
+    createBashToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import type {
     AgentToolResult,
     AgentToolUpdateCallback,
@@ -233,6 +237,254 @@ export function createFakeUi(): FakeExtensionUi {
 }
 
 /* -------------------------------------------------------------------------------------------------
+ * Session file
+ * ---------------------------------------------------------------------------------------------- */
+
+/**
+ * One session entry, as the tests read it.
+ *
+ * The tree itself is the real `SessionManager`; this is the flattened shape the tests query (custom
+ * entries carry `customType` and `data`, every entry carries its tree links).
+ */
+export interface FakeSessionEntry {
+    id: string;
+    parentId: string | null;
+    timestamp: string;
+    type: string;
+    customType?: string;
+    data?: unknown;
+}
+
+/** Read-only view of a session, i.e. the `ctx.sessionManager` the extension is handed. */
+export type ReadonlySession = Pick<
+    SessionManager,
+    | "getCwd"
+    | "getSessionDir"
+    | "getSessionId"
+    | "getSessionFile"
+    | "getLeafId"
+    | "getLeafEntry"
+    | "getEntry"
+    | "getLabel"
+    | "getBranch"
+    | "buildContextEntries"
+    | "getHeader"
+    | "getEntries"
+    | "getTree"
+    | "getSessionName"
+>;
+
+/** Flatten one real `SessionEntry` into the shape the tests assert on. */
+function toFakeEntry(entry: unknown): FakeSessionEntry {
+    const raw = entry as {
+        id: string;
+        parentId: string | null;
+        timestamp: string;
+        type: string;
+        customType?: string;
+        data?: unknown;
+    };
+    return {
+        id: raw.id,
+        parentId: raw.parentId ?? null,
+        timestamp: raw.timestamp,
+        type: raw.type,
+        customType: raw.customType,
+        data: raw.data,
+    };
+}
+
+/** One entry a {@link FakeSessionLog} can be seeded with, as a session file holds it. */
+export interface SeededSessionEntry {
+    id: string;
+    parentId: string | null;
+    type: string;
+    customType?: string;
+    data?: unknown;
+}
+
+/** Options for {@link FakeSessionLog}. */
+export interface FakeSessionLogOptions {
+    /** Working directory recorded in the session. */
+    cwd?: string;
+    /**
+     * Entries the session starts with, in file order (`parentId` links build the tree).
+     *
+     * Seeding exists because pi allocates entry ids itself: a test that needs readable fixture ids
+     * (`root`, `m1`) has to hand them to the manager once, exactly as replaying a session file does.
+     */
+    entries?: SeededSessionEntry[];
+}
+
+/**
+ * A session as it persists: the real pi `SessionManager`, plus the small test-facing surface around it.
+ *
+ * The tree, the active leaf, entry ids and `getBranch()` are pi's own implementation
+ * (`SessionManager.inMemory()`) - the tests must not reimplement the semantics the extension is
+ * built on. What this wrapper adds is only what a test needs to inspect and arrange a session:
+ * `entries()` / `entry()` snapshots, `leafId` / `setLeaf()` to model `/tree` navigation and
+ * `/resume`, and an `append()` for fixtures.
+ *
+ * A log survives an extension instance deliberately: reopening a session (startup after `/quit`,
+ * `/resume`) only registers a new extension over the same manager.
+ */
+export class FakeSessionLog {
+    private readonly manager: SessionManager;
+
+    constructor(options: FakeSessionLogOptions = {}) {
+        const cwd = options.cwd ?? process.cwd();
+        const seeded = options.entries ?? [];
+        this.manager =
+            seeded.length === 0
+                ? SessionManager.inMemory(cwd)
+                : SessionManager.inMemory(cwd, {}, [newSessionHeader(cwd), ...seeded.map(toFileEntry)]);
+    }
+
+    /** The real session manager this log wraps. */
+    get sessionManager(): SessionManager {
+        return this.manager;
+    }
+
+    /** Every entry of the session, in append order. */
+    entries(): FakeSessionEntry[] {
+        return this.manager.getEntries().map(toFakeEntry);
+    }
+
+    /** The entry with `id`, or undefined. */
+    entry(id: string): FakeSessionEntry | undefined {
+        const entry = this.manager.getEntry(id);
+        return entry ? toFakeEntry(entry) : undefined;
+    }
+
+    /** The active branch, root first - pi's `getBranch()`. */
+    getBranch(fromId?: string): FakeSessionEntry[] {
+        return this.manager.getBranch(fromId).map(toFakeEntry);
+    }
+
+    /** The active leaf, i.e. the parent new entries are appended under. */
+    get leafId(): string | null {
+        return this.manager.getLeafId();
+    }
+
+    /** Move the active leaf without deleting anything - pi's `sessionManager.branch(id)`. */
+    setLeaf(leafId: string | null): void {
+        if (leafId === null) {
+            this.manager.resetLeaf();
+            return;
+        }
+        this.manager.branch(leafId);
+    }
+
+    /**
+     * Append a fixture entry as a child of the current leaf and advance the leaf to it.
+     *
+     * Messages go through `appendMessage`, custom entries through `appendCustomEntry`, so the entry
+     * shape, the allocated id and the leaf bookkeeping are all pi's.
+     */
+    append(entry: { type: string; customType?: string; data?: unknown }): FakeSessionEntry {
+        if (entry.type === "custom") {
+            if (entry.customType === undefined) {
+                throw new Error("a custom fixture entry needs a customType");
+            }
+            const id = this.manager.appendCustomEntry(entry.customType, entry.data);
+            const stored = this.entry(id);
+            if (!stored) {
+                throw new Error(`appendCustomEntry did not store ${id}`);
+            }
+            return stored;
+        }
+        return this.appendMessage(`fixture-${entry.type}`);
+    }
+
+    /** Append a user message entry, pi's way, and return the stored entry. */
+    appendMessage(text: string): FakeSessionEntry {
+        const id = this.manager.appendMessage({
+            role: "user",
+            content: text,
+            timestamp: Date.now(),
+        } as never);
+        const stored = this.entry(id);
+        if (!stored) {
+            throw new Error(`appendMessage did not store ${id}`);
+        }
+        return stored;
+    }
+
+    /** The newest entry with the given custom type, or undefined. */
+    latestCustom(customType: string): FakeSessionEntry | undefined {
+        return this.entries()
+            .filter((entry) => entry.customType === customType)
+            .at(-1);
+    }
+
+    /** The newest entry with the given custom type; throws when the session holds none. */
+    leafOf(customType: string, fromIndex = 0): string {
+        const matches = this.entries().filter((entry) => entry.customType === customType);
+        const found = matches[matches.length - 1 - fromIndex];
+        if (!found) {
+            throw new Error(`no ${customType} entry in the session log`);
+        }
+        return found.id;
+    }
+
+    private lastEntry(): FakeSessionEntry | undefined {
+        return this.entries().at(-1);
+    }
+}
+/** A minimal session header for a seeded in-memory session. */
+function newSessionHeader(cwd: string): never {
+    return {
+        type: "session",
+        version: 3,
+        id: `test-session-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        cwd,
+    } as never;
+}
+
+/** Convert a seeded entry into the file shape pi replays. */
+function toFileEntry(entry: SeededSessionEntry): never {
+    const timestamp = new Date().toISOString();
+    if (entry.type === "custom") {
+        return {
+            type: "custom",
+            id: entry.id,
+            parentId: entry.parentId,
+            timestamp,
+            customType: entry.customType,
+            data: entry.data,
+        } as never;
+    }
+    return {
+        type: "message",
+        id: entry.id,
+        parentId: entry.parentId,
+        timestamp,
+        message: { role: "user", content: entry.id, timestamp: Date.now() },
+    } as never;
+}
+
+/**
+ * The session context handed to handlers: a session over `log`'s real manager, read-only.
+ *
+ * Reads go straight to the real manager, so `getBranch()` answers exactly as it does in pi.
+ */
+function sessionContext(log: FakeSessionLog | undefined): ReadonlySession {
+    return (log?.sessionManager ?? SessionManager.inMemory()) as unknown as ReadonlySession;
+}
+
+/** An empty session manager for a session that has no log yet. */
+export function emptySessionManager(): ReadonlySession {
+    return SessionManager.inMemory() as unknown as ReadonlySession;
+}
+
+/** Record one `pi.appendEntry` call, in call order. */
+export interface AppendEntryCall {
+    customType: string;
+    data: unknown;
+}
+
+/* -------------------------------------------------------------------------------------------------
  * Fake extension context and pi host
  * ---------------------------------------------------------------------------------------------- */
 
@@ -242,6 +494,13 @@ export interface FakeContextOptions {
     hasUI?: boolean;
     /** UI to expose as `ctx.ui`; a fresh {@link createFakeUi} by default. */
     ui?: FakeExtensionUi;
+    /**
+     * Session backing `ctx.sessionManager`; a fresh empty one by default.
+     *
+     * Pass the same log to two contexts to model one session being reopened (startup after `/quit`,
+     * `/resume`), and a different log to model another session file (`/new`, `/resume` elsewhere).
+     */
+    sessionLog?: FakeSessionLog;
 }
 
 /**
@@ -249,7 +508,7 @@ export interface FakeContextOptions {
  *
  * `ui` is a {@link FakeExtensionUi} and `hasUI` defaults to `true`; set `hasUI: false` to model a
  * print/RPC session without an interactive UI. `cwd` is what the extension reads for the shell job
- * and for the delegated bash tool.
+ * and for the delegated bash tool; `sessionManager` is the session's real pi `SessionManager`.
  */
 export function createFakeContext(cwd: string, options: FakeContextOptions = {}): ExtensionContext {
     const ui = options.ui ?? createFakeUi();
@@ -257,11 +516,21 @@ export function createFakeContext(cwd: string, options: FakeContextOptions = {})
         cwd,
         hasUI: options.hasUI ?? true,
         ui,
+        sessionManager: sessionContext(options.sessionLog),
     } as unknown as ExtensionContext;
 }
 
-/** Extension event name the fake host can fire. */
-export type PiEventName = "session_start" | "session_shutdown";
+/**
+ * Extension event name the fake host can fire; mirrors the session events pi emits.
+ *
+ * `session_before_tree` fires before pi switches the session's leaf, `session_tree` after - the
+ * split the extension relies on to persist the departing branch's shell state.
+ */
+export type PiEventName =
+    | "session_start"
+    | "session_before_tree"
+    | "session_tree"
+    | "session_shutdown";
 
 /** Handler shape accepted by `pi.on`; the extension's handlers take `(event, ctx)`. */
 export type PiEventHandler = (event: unknown, ctx: ExtensionContext, ...rest: unknown[]) => unknown;
@@ -272,14 +541,18 @@ export type PiEventHandler = (event: unknown, ctx: ExtensionContext, ...rest: un
  *
  * A real pi fires the session events itself; a test drives them through {@link emit} so it controls
  * when the extension subscribes to the shell manager and which context renders the dock.
+ * `appendEntry` records into the {@link FakeSessionLog} the host was created for (if any) and
+ * mirrors pi's behaviour of throwing outside a session.
  */
 export interface FakePiHost {
     readonly registeredTools: readonly BashToolDefinition[];
     readonly registeredCommands: readonly RegisteredCommand[];
     /** Custom messages the extension sent to the session, in call order. */
     readonly sendMessageCalls: readonly SendMessageCall[];
+    /** `pi.appendEntry` calls, in call order. */
+    readonly appendEntryCalls: readonly AppendEntryCall[];
     /** Fire one extension event with the given context, awaiting every handler. */
-    emit(event: PiEventName, ctx: ExtensionContext): Promise<void>;
+    emit(event: PiEventName, ctx: ExtensionContext, payload?: Record<string, unknown>): Promise<void>;
     /** Currently registered handlers for an event, in registration order. */
     handlers(event: PiEventName): readonly PiEventHandler[];
 }
@@ -297,13 +570,19 @@ export interface RegisteredCommand {
  * The extension captures `process.cwd()` while the factory runs, and that captured directory is
  * also the built-in bash tool's working directory. The harness chdirs into `cwd` for the
  * registration call and restores the previous directory afterwards.
+ *
+ * `appendEntry` routes to the real `SessionManager.appendCustomEntry` of the host's session, the
+ * same call pi makes, so a persisted snapshot lands on the branch's actual leaf and shows up in
+ * `log.getBranch()` exactly as in a live session.
  */
-export function registerExtension(cwd: string): FakePiHost {
+export function registerExtension(cwd: string, sessionLog?: FakeSessionLog): FakePiHost {
     const previousCwd = process.cwd();
     const registeredTools: BashToolDefinition[] = [];
     const registeredCommands: RegisteredCommand[] = [];
     const sendMessageCalls: SendMessageCall[] = [];
+    const appendEntryCalls: AppendEntryCall[] = [];
     const handlersByEvent = new Map<PiEventName, PiEventHandler[]>();
+    const sessionManager = sessionLog?.sessionManager;
 
     const api = {
         registerTool: (tool: BashToolDefinition) => {
@@ -318,6 +597,11 @@ export function registerExtension(cwd: string): FakePiHost {
                 description: options.description,
                 handler: options.handler,
             });
+        },
+        appendEntry: (customType: string, data?: unknown) => {
+            appendEntryCalls.push({ customType, data });
+            // pi's own routing: the session manager owns the leaf and the entry id.
+            sessionManager?.appendCustomEntry(customType, data);
         },
         sendMessage: (message: SendMessageCall["message"], options?: SendMessageCall["options"]) => {
             sendMessageCalls.push({ message, options });
@@ -350,10 +634,11 @@ export function registerExtension(cwd: string): FakePiHost {
         registeredTools,
         registeredCommands,
         sendMessageCalls,
+        appendEntryCalls,
         handlers: (event) => handlersByEvent.get(event) ?? [],
-        async emit(event, ctx) {
+        async emit(event, ctx, payload) {
             for (const handler of handlersByEvent.get(event) ?? []) {
-                await handler({ type: event }, ctx);
+                await handler({ type: event, ...payload }, ctx);
             }
         },
     };
@@ -399,6 +684,8 @@ export interface ExtensionSession {
     tool: BashToolDefinition;
     ctx: ExtensionContext;
     ui: FakeExtensionUi;
+    /** Session log backing `ctx.sessionManager` and the host's `appendEntry`. */
+    sessionLog: FakeSessionLog;
 }
 
 /**
@@ -406,21 +693,23 @@ export interface ExtensionSession {
  *
  * Firing `session_start` is what pi always does before a tool call; the extension's command
  * announcement depends on that handler having captured a context, and the shell dock subscription
- * only exists afterwards.
+ * only exists afterwards. The session itself is a real `SessionManager`, so `pi.appendEntry` and
+ * `ctx.sessionManager` share its leaf exactly as they do in pi.
  */
 export async function openSession(
     cwd: string,
     options: FakeContextOptions = {},
 ): Promise<ExtensionSession> {
-    const host = registerExtension(cwd);
+    const sessionLog = options.sessionLog ?? new FakeSessionLog({ cwd });
+    const host = registerExtension(cwd, sessionLog);
     const tool = host.registeredTools.find((entry) => entry.name === "bash");
     if (!tool) {
         throw new Error('lune-shell-inspector did not register a "bash" tool');
     }
     const ui = options.ui ?? createFakeUi();
-    const ctx = createFakeContext(cwd, { ...options, ui });
+    const ctx = createFakeContext(cwd, { ...options, ui, sessionLog });
     await host.emit("session_start", ctx);
-    return { host, tool, ctx, ui };
+    return { host, tool, ctx, ui, sessionLog };
 }
 
 /* -------------------------------------------------------------------------------------------------

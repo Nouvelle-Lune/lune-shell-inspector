@@ -3,10 +3,11 @@
  *
  * Every terminal job event (completed, failed, killed) sends exactly one custom message to the
  * session as a steering message, so the agent learns about a detached shell it could no longer
- * observe; the non-terminal events (started, output, cleared) stay silent. The lifecycle is part of
- * the contract: the listener is installed per session and replaced on every session_start, removed
- * on session_shutdown - or by the unsubscribe the registration returns - so restarts never stack
- * listeners and one job can never notify twice.
+ * observe; the non-terminal events (started, output, cleared) stay silent. A session teardown is a
+ * kill: `clearAllJobs()` settles every running job as killed, so it notifies like any other kill
+ * before the job is dropped. The lifecycle is part of the contract: the listener is installed per
+ * session and replaced on every session_start, removed on session_shutdown - or by the unsubscribe
+ * the registration returns - so restarts never stack listeners and one job can never notify twice.
  */
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
@@ -32,6 +33,15 @@ import {
 /** Text of one captured `pi.sendMessage` call. */
 function messageText(call: SendMessageCall): string {
     return typeof call.message.content === "string" ? call.message.content : "";
+}
+
+/** One captured `pi.sendMessage` call that must exist, with the array type restored after narrowing. */
+function sentMessage(calls: readonly SendMessageCall[], index: number): SendMessageCall {
+    const call = calls[index];
+    if (!call) {
+        throw new Error(`expected a sendMessage call at index ${index}`);
+    }
+    return call;
 }
 
 /** Start a running job directly in the manager, the way the background runner does. */
@@ -162,9 +172,10 @@ describe("lune-shell-inspector background notifications", () => {
         });
     });
 
-    it("stays silent for non-terminal events and the session's own clear", async () => {
-        // Contract: only a settled job is worth interrupting for; started, output and cleared events
-        // - including the clear session_start performs - must not wake the agent.
+    it("stays silent for non-terminal events and reports the session's own clear as a kill", async () => {
+        // Contract: only a settled job is worth interrupting for; started and output events must not
+        // wake the agent. The clear session_start performs settles the running job as killed, and
+        // that terminal event notifies - exactly once.
         await withSession("notify-silent", async (session) => {
             const { jobId } = await startBackgroundBashCommand(session.tool, {
                 command: "sleep 1; printf 'late\\n'",
@@ -173,12 +184,20 @@ describe("lune-shell-inspector background notifications", () => {
             });
 
             shellManager.appendOutput(jobId, "");
+            assert.deepEqual(session.host.sendMessageCalls, [], "started and output events must stay silent");
+
             shellManager.clearAllJobs();
 
             // Give the aborted execution time to reject and reach its refused settle.
             await new Promise((resolve) => setTimeout(resolve, 300));
 
-            assert.deepEqual(session.host.sendMessageCalls, []);
+            assert.equal(session.host.sendMessageCalls.length, 1, "the teardown kill notifies once");
+            const notification = sentMessage(session.host.sendMessageCalls, 0);
+            assert.deepEqual(notification.message.details, {
+                shellJobId: jobId,
+                status: "killed",
+                exitCode: undefined,
+            });
         });
     });
 

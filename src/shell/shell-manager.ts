@@ -1,4 +1,4 @@
-import { DEFAULT_MAX_LINES, truncateTail } from "@earendil-works/pi-coding-agent";
+import { DEFAULT_MAX_LINES, truncateTail, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import xterm, { type Terminal as XtermTerminal } from "@xterm/headless";
 
 // @xterm/headless ships CommonJS, and its UMD factory hides the exports from Node's
@@ -154,11 +154,23 @@ export class ShellManager {
         });
     }
 
-    clearAllJobs(): void {
+    /**
+     * 
+     * @param pi The extension API instance, used to persist the current state of all jobs and their statistics to the pi session log.
+     */
+    clearAllJobs(pi?: ExtensionAPI): void {
         // Session teardown must not leave processes running behind the cleared job list.
         const runningJobs = this.getRunningJobsList();
         for (const job of runningJobs) {
-            job.controller.abort();
+            this.killJob(job.id, "pi session shutdown");
+        }
+
+        // Persist the current state of all jobs and their statistics to the pi session log.
+        if (pi) {
+            pi.appendEntry("lune-shell-view-status", {
+                jobs: this.getAllJobsList().map(job => this.getJobSnapshot(job.id)),
+                stats: this.getAllJobsStatusStat()
+            });
         }
 
         // Dropping the map alone would leave every emulator and its emitters alive.
@@ -166,13 +178,9 @@ export class ShellManager {
             job.terminal.dispose();
         }
 
+        // clear the manager status before emitting the jobs-cleared event
         this.jobs.clear();
-
-        this.jobsStatusStat.runningCount = 0;
-        this.jobsStatusStat.completedCount = 0;
-        this.jobsStatusStat.failedCount = 0;
-        this.jobsStatusStat.killedCount = 0;
-
+        this.clearManagerstatus();
         this.emit({
             type: "jobs-cleared"
         });
@@ -324,6 +332,37 @@ export class ShellManager {
         return true;
     }
 
+    restoreShellManager(ctx: ExtensionContext): void {
+        const shellStateEntry = [...ctx.sessionManager.getBranch()]
+            .reverse()
+            .find(
+                entry =>
+                    entry.type === "custom" &&
+                    entry.customType === "lune-shell-view-status"
+            );
+
+        if (!shellStateEntry || shellStateEntry.type !== "custom") return;
+
+        const snapshot = shellStateEntry.data as {
+            jobs: Array<Omit<ShellJob, "terminal" | "controller">>;
+            stats: JobsStatusStat;
+        };
+
+        for (const saved of snapshot.jobs) {
+            const terminal = createScreen();
+            terminal.write(saved.output.content);
+
+            this.jobs.set(saved.id, {
+                ...saved,
+                output: { ...saved.output },
+                terminal,
+                controller: new AbortController(),
+            });
+        }
+
+        Object.assign(this.jobsStatusStat, snapshot.stats);
+    }
+
     private requireJob(id: string): ShellJob {
         const job = this.jobs.get(id);
 
@@ -411,6 +450,40 @@ export class ShellManager {
             type: "job-killed",
             id: id
         });
+    }
+
+    private clearManagerstatus() {
+        this.jobsStatusStat.runningCount = 0;
+        this.jobsStatusStat.completedCount = 0;
+        this.jobsStatusStat.failedCount = 0;
+        this.jobsStatusStat.killedCount = 0;
+    }
+
+    private getJobSnapshot(jobID: string) {
+        const job = this.getJob(jobID);
+        if (!job) {
+            return {
+                id: jobID,
+            };
+        }
+        return {
+            id: job.id,
+            command: job.command,
+            cwd: job.cwd,
+            status: job.status,
+            startedAt: job.startedAt,
+            finishedAt: job.finishedAt,
+            lastActivityAt: job.lastActivityAt,
+            exitCode: job.exitCode,
+            error: job.error,
+            output: {
+                content: job.output.content,
+                truncated: job.output.truncated,
+                totalLines: job.output.totalLines,
+                totalBytes: job.output.totalBytes,
+                fullOutputPath: job.output.fullOutputPath,
+            }
+        }
     }
 }
 

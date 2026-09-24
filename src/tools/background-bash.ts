@@ -39,6 +39,8 @@ export function startBackgroundShell(
             timeout,
 
             onData(data) {
+                // prevent appending output after the shutdown kills the job
+                if (shellManager.getJob(toolCallId)?.status !== "running") { return; }
                 // Retention (bounded tail plus the full-output file) is enforced by appendOutput.
                 shellManager.appendOutput(
                     toolCallId,

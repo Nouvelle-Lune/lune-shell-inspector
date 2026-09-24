@@ -23,8 +23,10 @@ export default function (pi: ExtensionAPI): void {
         // Module state may survive extension reloads, so a new session starts
         // with an explicitly empty shell view.
         shellManager.clearAllJobs();
-
         shellDock.setCtx(ctx)
+
+        // Restore the shell manager state from the session context.
+        shellManager.restoreShellManager(ctx);
 
         // Drop the previous session's listener first: it closes over a stale
         // ctx, and duplicate subscriptions would render twice per job update.
@@ -51,7 +53,17 @@ export default function (pi: ExtensionAPI): void {
         shellDock.clear();
         unsubscribeBackgroundShellNotifications?.();
         unsubscribeBackgroundShellNotifications = undefined;
+        shellManager.clearAllJobs(pi);
+    });
+
+    pi.on("session_before_tree", (_event, ctx) => {
+        shellManager.clearAllJobs(pi);
+    });
+
+    pi.on("session_tree", (_event, ctx) => {
         shellManager.clearAllJobs();
+        shellManager.restoreShellManager(ctx);
+        shellDock.render();
     });
 
     // Register tools

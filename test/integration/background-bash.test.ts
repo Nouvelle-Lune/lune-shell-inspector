@@ -412,9 +412,10 @@ describe("lune-shell-inspector background bash", () => {
     });
 
     it("ignores the execution's settle after the session dropped the job", async () => {
-        // Contract: session teardown aborts a running job and clears it; when the aborted execution
-        // then rejects, the runner's settle must be a no-op instead of an unhandled rejection or a
-        // resurrected job.
+        // Contract: session teardown kills a running job and clears it; the kill is the job's one
+        // terminal event and notifies like any other settle. When the aborted execution then
+        // rejects, the runner's settle must be a no-op instead of an unhandled rejection, a
+        // resurrected job or a second notification.
         const { jobId } = await startBackgroundBashCommand(session.tool, {
             command: "sleep 1",
             ctx: session.ctx,
@@ -438,14 +439,22 @@ describe("lune-shell-inspector background bash", () => {
             false,
             "a settle for a dropped job must be refused directly, too",
         );
-        assert.deepEqual(session.host.sendMessageCalls, [], "a dropped job must not notify");
+        assert.equal(session.host.sendMessageCalls.length, 1, "the teardown kill notifies once");
+        const notification = session.host.sendMessageCalls[0]!;
+        assert.equal(notification.message.customType, "background-shell-notification");
+        assert.deepEqual(notification.message.details, {
+            shellJobId: jobId,
+            status: "killed",
+            exitCode: undefined,
+        });
+        assert.match(String(notification.message.content), /^Background shell call-clear-race killed\./);
     });
 
     it("refuses a chunk that arrives after teardown instead of resurrecting the job", async () => {
-        // Race: the real backend can deliver a buffered onData chunk after clearAllJobs() aborted
-        // the process and dropped the job. appendOutput() is running-only and refuses the unknown
-        // id loudly: a silent drop would hide the race, and a recreated job would show a shell that
-        // no longer exists.
+        // Race: the real backend can deliver a buffered onData chunk after clearAllJobs() killed the
+        // process and dropped the job. appendOutput() is running-only and refuses the unknown id
+        // loudly: a silent drop would hide the race, and a recreated job would show a shell that
+        // no longer exists. The teardown kill notifies; the refused chunk must not notify again.
         const { jobId } = await startBackgroundBashCommand(session.tool, {
             command: "sleep 5",
             ctx: session.ctx,
@@ -453,12 +462,17 @@ describe("lune-shell-inspector background bash", () => {
         });
 
         shellManager.clearAllJobs();
+        const callsAfterTeardown = session.host.sendMessageCalls.length;
 
         assert.throws(
             () => shellManager.appendOutput(jobId, "buffered chunk"),
             /Unknown shell job: call-teardown-chunk/,
         );
         assert.equal(shellManager.getJob(jobId), undefined, "the cleared job must stay gone");
-        assert.deepEqual(session.host.sendMessageCalls, [], "a refused chunk must not notify");
+        assert.equal(
+            session.host.sendMessageCalls.length,
+            callsAfterTeardown,
+            "a refused chunk must not notify",
+        );
     });
 });
