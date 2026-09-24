@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/lune-shell-inspector.svg)](https://www.npmjs.com/package/lune-shell-inspector) [![npm downloads](https://img.shields.io/npm/dw/lune-shell-inspector.svg)](https://www.npmjs.com/package/lune-shell-inspector) [![license](https://img.shields.io/npm/lune-shell-inspector.svg)](https://github.com/Nouvelle-Lune/lune-shell-inspector/blob/main/LICENSE)
 
-![Lune Shell Inspector preview](assets/preview.png)
+![Lune Shell Inspector preview](https://raw.githubusercontent.com/Nouvelle-Lune/lune-shell-inspector/main/assets/preview.png)
 
 **Managed background shells for [Pi](https://pi.dev), with a live dock and an interactive `/shell` inspector.**
 
