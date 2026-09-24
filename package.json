@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "Shell dock and /shell inspector for pi's background bash jobs",
   "type": "module",
-  "main": "src/index.ts",
   "files": [
     "src",
     "assets",
