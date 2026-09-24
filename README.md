@@ -1,21 +1,12 @@
 # Lune Shell Inspector
 
+[![npm version](https://img.shields.io/npm/v/lune-shell-inspector.svg)](https://www.npmjs.com/package/lune-shell-inspector) [![npm downloads](https://img.shields.io/npm/dw/lune-shell-inspector.svg)](https://www.npmjs.com/package/lune-shell-inspector) [![license](https://img.shields.io/npm/lune-shell-inspector.svg)](https://github.com/Nouvelle-Lune/lune-shell-inspector/blob/main/LICENSE)
+
 ![Lune Shell Inspector preview](assets/preview.png)
 
 **Managed background shells for [Pi](https://pi.dev), with a live dock and an interactive `/shell` inspector.**
 
 Lune Shell Inspector lets Pi keep long-running commands visible and manageable without changing the normal foreground `bash` experience. Commands that need an immediate result stay in the foreground; independent work can run in the background while the agent continues.
-
-## What it does
-
-- **Keeps foreground bash native.** Normal commands continue to use Pi's standard foreground behavior and transcript rendering.
-- **Runs independent work in the background.** Background shell jobs return immediately so the agent can continue with other work.
-- **Shows live shell status below the editor.** The dock summarizes running and settled jobs without taking over the transcript.
-- **Adds an interactive `/shell` inspector.** Browse jobs, inspect status and metadata, and follow or scroll their terminal output.
-- **Makes terminal output readable.** Progress bars, redraws, spinners, and other terminal-style output are rendered as a screen instead of raw escape sequences.
-- **Lets the agent inspect background jobs.** The `background_shell` tool can query job status and, when needed, current output.
-- **Returns completion to the agent.** When a background job finishes, fails, or is killed, the result is delivered back to the agent so it can react without constant polling.
-- **Follows the Pi session.** Shell state is restored with the active session branch, and running jobs are stopped when their owning Pi session shuts down.
 
 ## Quick start
 
@@ -50,6 +41,17 @@ or:
 ```text
 Run this command in the foreground because I need the result before continuing.
 ```
+
+## What it does
+
+- **Keeps foreground bash native.** Normal commands continue to use Pi's standard foreground behavior and transcript rendering.
+- **Runs independent work in the background.** Background shell jobs return immediately so the agent can continue with other work.
+- **Shows live shell status below the editor.** The dock summarizes running and settled jobs without taking over the transcript.
+- **Adds an interactive `/shell` inspector.** Browse jobs, inspect status and metadata, and follow or scroll their terminal output.
+- **Makes terminal output readable.** Progress bars, redraws, spinners, and other terminal-style output are rendered as a screen instead of raw escape sequences.
+- **Lets the agent inspect background jobs.** The `background_shell` tool can query job status and, when needed, current output.
+- **Returns completion to the agent.** When a background job finishes, fails, or is killed, the result is delivered back to the agent so it can react without constant polling.
+- **Follows the Pi session.** Shell state is restored with the active session branch, and running jobs are stopped when their owning Pi session shuts down.
 
 ## Shell dock
 
