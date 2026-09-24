@@ -36,7 +36,7 @@ import {
     type ExtensionSession,
 } from "../harness.ts";
 
-describe("pi-shell-view background bash", () => {
+describe("lune-shell-inspector background bash", () => {
     let workDir: string;
     let session: ExtensionSession;
 
@@ -63,7 +63,7 @@ describe("pi-shell-view background bash", () => {
 
         assert.equal(run.failed, false, `expected the call to succeed: ${run.error?.message ?? ""}`);
         assert.equal(jobId, "call-immediate");
-        assert.equal(resultText(requireResult(run)), `Background shell started call-immediate: ${command}`);
+        assert.equal(resultText(requireResult(run)), `Background shell started with ID call-immediate: ${command}`);
         assert.deepEqual(requireResult(run).details, { shellJobId: "call-immediate", background: true });
         assert.deepEqual(run.updates, [], "a background call must not stream to its caller");
         assert.ok(run.durationMs < 1000, `the call must return while the 2s sleep runs, took ${run.durationMs}ms`);
@@ -322,7 +322,7 @@ describe("pi-shell-view background bash", () => {
     it("fails a job whose working directory does not exist", async () => {
         // Contract: the execution fails before a process exists, and the job is classified as a
         // failure with the runner's error message rather than completing silently.
-        const missingDir = "/pi-shell-view/does-not-exist";
+        const missingDir = "/lune-shell-inspector/does-not-exist";
         const { jobId } = await startBackgroundBashCommand(session.tool, {
             command: "echo never",
             ctx: createFakeContext(missingDir),

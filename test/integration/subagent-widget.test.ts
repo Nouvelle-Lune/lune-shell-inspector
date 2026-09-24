@@ -33,7 +33,7 @@ import {
 } from "../harness.ts";
 
 /** Widget key of the shell dock. */
-const SH_DOCK_KEY = "pi-shell-view";
+const SH_DOCK_KEY = "lune-shell-inspector";
 
 /** Widget keys pi-subagents uses for the async job list and the inline fleet surface. */
 const SUBAGENT_ASYNC_KEY = "subagent-async";

@@ -39,9 +39,7 @@ export function startBackgroundShell(
             timeout,
 
             onData(data) {
-                // TODO: the job output grows without bound - no byte cap and no truncation - so a
-                // chatty long-running command can exhaust memory. Add a retention limit here (or in
-                // ShellManager.appendOutput) before this path is used for real workloads.
+                // Retention (bounded tail plus the full-output file) is enforced by appendOutput.
                 shellManager.appendOutput(
                     toolCallId,
                     data.toString("utf8"),
@@ -87,7 +85,7 @@ export function startBackgroundShell(
             {
                 type: "text" as const,
                 text:
-                    `Background shell started ${toolCallId}: ${command}`,
+                    `Background shell started with ID ${toolCallId}: ${command}`,
             },
         ],
         details: {

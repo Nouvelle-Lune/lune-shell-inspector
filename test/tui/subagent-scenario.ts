@@ -14,8 +14,8 @@
  * parent and the child interleave. No network is involved; `faux/faux-1` is the only model in play.
  *
  * Selection (all optional, no silent fallback):
- * - `PI_SHELL_VIEW_COMMAND` replaces the parent's shell command.
- * - `PI_SHELL_VIEW_PROBE_COMMAND` replaces the probe's shell command (foreground in the probe session).
+ * - `LUNE_SHELL_INSPECTOR_COMMAND` replaces the parent's shell command.
+ * - `LUNE_SHELL_INSPECTOR_PROBE_COMMAND` replaces the probe's shell command (foreground in the probe session).
  */
 import {
     fauxAssistantMessage,
@@ -27,12 +27,12 @@ import {
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 /** Name the parent's scripted `subagent` call uses. */
-const PROBE_AGENT_NAME = "pi-shell-view-probe";
+const PROBE_AGENT_NAME = "lune-shell-inspector-probe";
 
 /** Marker planted in the probe's system prompt so scripted responses can tell the sessions apart. */
 const PROBE_MARKER = "PI-SHELL-VIEW-PROBE-MARKER";
 
-const PROBE_SYSTEM_PROMPT = `You are ${PROBE_MARKER}, an offline probe subagent used by the pi-shell-view TUI observer. Run the task and report back in one line.`;
+const PROBE_SYSTEM_PROMPT = `You are ${PROBE_MARKER}, an offline probe subagent used by the lune-shell-inspector TUI observer. Run the task and report back in one line.`;
 
 /** Closing texts, printed once each session's scripted turns are exhausted. */
 const PARENT_FINAL_TEXT = "fixture finished";
@@ -88,8 +88,8 @@ export default function (pi: ExtensionAPI): void {
     const faux = fauxProvider();
     pi.registerProvider(faux.provider);
 
-    const parentCommand = commandFromEnv("PI_SHELL_VIEW_COMMAND", DEFAULT_PARENT_COMMAND);
-    const probeCommand = commandFromEnv("PI_SHELL_VIEW_PROBE_COMMAND", DEFAULT_PROBE_COMMAND);
+    const parentCommand = commandFromEnv("LUNE_SHELL_INSPECTOR_COMMAND", DEFAULT_PARENT_COMMAND);
+    const probeCommand = commandFromEnv("LUNE_SHELL_INSPECTOR_PROBE_COMMAND", DEFAULT_PROBE_COMMAND);
 
     const parent = { turns: 0 };
     const probe = { turns: 0 };

@@ -1,11 +1,11 @@
 /**
  * Background shell notification contract.
  *
- * Every terminal job event (completed, failed, killed) sends exactly one follow-up custom message
- * to the session, so the agent learns about a detached shell it could no longer observe; the
- * non-terminal events (started, output, cleared) stay silent. The lifecycle is part of the
- * contract: the listener is installed per session and replaced on every session_start, removed on
- * session_shutdown - or by the unsubscribe the registration returns - so restarts never stack
+ * Every terminal job event (completed, failed, killed) sends exactly one custom message to the
+ * session as a steering message, so the agent learns about a detached shell it could no longer
+ * observe; the non-terminal events (started, output, cleared) stay silent. The lifecycle is part of
+ * the contract: the listener is installed per session and replaced on every session_start, removed
+ * on session_shutdown - or by the unsubscribe the registration returns - so restarts never stack
  * listeners and one job can never notify twice.
  */
 import assert from "node:assert/strict";
@@ -54,7 +54,7 @@ async function withSession(
     }
 }
 
-describe("pi-shell-view background notifications", () => {
+describe("lune-shell-inspector background notifications", () => {
     beforeEach(() => {
         shellManager.clearAllJobs();
     });
@@ -63,9 +63,9 @@ describe("pi-shell-view background notifications", () => {
         shellManager.clearAllJobs();
     });
 
-    it("sends one completion notification with the job metadata and the follow-up options", async () => {
+    it("sends one completion notification with the job metadata and the steering options", async () => {
         // Contract: the immediate tool result cannot report the outcome, so the settled job sends
-        // one follow-up turn carrying the id, status, command, exit code and output, without ever
+        // one steering message carrying the id, status, command, exit code and output, without ever
         // becoming a visible transcript row.
         await withSession("notify-completed", async (session) => {
             const { jobId } = await startBackgroundBashCommand(session.tool, {
@@ -84,7 +84,7 @@ describe("pi-shell-view background notifications", () => {
             assert.equal(call.message.customType, "background-shell-notification");
             assert.equal(call.message.display, false, "the notification must not enter the transcript");
             assert.equal(call.options?.triggerTurn, true, "the agent must get a turn to read it");
-            assert.equal(call.options?.deliverAs, "followUp");
+            assert.equal(call.options?.deliverAs, "steer", "the notification must steer the running turn");
             assert.deepEqual(call.message.details, {
                 shellJobId: jobId,
                 status: "completed",
@@ -163,7 +163,7 @@ describe("pi-shell-view background notifications", () => {
     });
 
     it("stays silent for non-terminal events and the session's own clear", async () => {
-        // Contract: only a settled job is worth a follow-up turn; started, output and cleared events
+        // Contract: only a settled job is worth interrupting for; started, output and cleared events
         // - including the clear session_start performs - must not wake the agent.
         await withSession("notify-silent", async (session) => {
             const { jobId } = await startBackgroundBashCommand(session.tool, {

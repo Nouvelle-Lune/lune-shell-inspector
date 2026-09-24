@@ -198,7 +198,7 @@ export class ShellManager {
             } else {
                 const path = join(
                     tmpdir(),
-                    `pi-shell-view-bash-${randomUUID()}.log`,
+                    `lune-shell-inspector-bash-${randomUUID()}.log`,
                 );
                 writeFileSync(path, next, "utf8");
 

@@ -44,7 +44,7 @@ function reportedLineCount(run: BashRun): number {
     return lineCount(reportedText(run));
 }
 
-describe("pi-shell-view long-running fixtures", () => {
+describe("lune-shell-inspector long-running fixtures", () => {
     let workDir: string;
     let session: ExtensionSession;
 

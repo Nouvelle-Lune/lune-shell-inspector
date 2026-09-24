@@ -16,10 +16,10 @@
  * Nothing is asserted here - the human watching the TUI judges the rows, the dock and the inspector.
  *
  * Selection (all optional, no silent fallback):
- * - `PI_SHELL_VIEW_COMMAND` replaces the long background command.
- * - `PI_SHELL_VIEW_FIXTURE` picks the long background fixture (default `long-output`, whose 200
+ * - `LUNE_SHELL_INSPECTOR_COMMAND` replaces the long background command.
+ * - `LUNE_SHELL_INSPECTOR_FIXTURE` picks the long background fixture (default `long-output`, whose 200
  *   lines overflow the inspector's pane); an unknown id throws while this extension loads.
- * - `PI_SHELL_VIEW_TIMEOUT` is the background command's timeout in seconds.
+ * - `LUNE_SHELL_INSPECTOR_TIMEOUT` is the background command's timeout in seconds.
  * The quick foreground command is fixed on purpose: it exists to show the delegation path.
  */
 import {
@@ -36,7 +36,7 @@ import { getFixture } from "../fixtures/long-running-scripts.ts";
 /** Synthetic low-risk command whose result the scripted turn pretends to need before continuing. */
 const QUICK_COMMAND = "printf 'workspace: 2 changed files\\n'";
 
-/** Fixture behind the background call when `PI_SHELL_VIEW_FIXTURE` is unset. */
+/** Fixture behind the background call when `LUNE_SHELL_INSPECTOR_FIXTURE` is unset. */
 const DEFAULT_BACKGROUND_FIXTURE = "long-output";
 
 /** Text the scripted model prints when it picks each mode; the TUI shows them next to the tool rows. */
@@ -60,25 +60,25 @@ function sleep(ms: number): Promise<void> {
 
 /** Long background command: the explicit override wins, otherwise the selected fixture. */
 function backgroundCommand(): string {
-    const override = process.env.PI_SHELL_VIEW_COMMAND;
+    const override = process.env.LUNE_SHELL_INSPECTOR_COMMAND;
     if (override !== undefined) {
         return override;
     }
-    const fixtureId = process.env.PI_SHELL_VIEW_FIXTURE ?? DEFAULT_BACKGROUND_FIXTURE;
+    const fixtureId = process.env.LUNE_SHELL_INSPECTOR_FIXTURE ?? DEFAULT_BACKGROUND_FIXTURE;
     // getFixture throws on unknown ids, so a typo surfaces while the extension loads instead of
     // quietly running a different fixture.
     return getFixture(fixtureId).command;
 }
 
-/** Timeout in seconds for the background command, or undefined when `PI_SHELL_VIEW_TIMEOUT` is unset. */
+/** Timeout in seconds for the background command, or undefined when `LUNE_SHELL_INSPECTOR_TIMEOUT` is unset. */
 function backgroundTimeoutSeconds(): number | undefined {
-    const raw = process.env.PI_SHELL_VIEW_TIMEOUT;
+    const raw = process.env.LUNE_SHELL_INSPECTOR_TIMEOUT;
     if (raw === undefined) {
         return undefined;
     }
     const seconds = Number(raw);
     if (!Number.isFinite(seconds) || seconds <= 0) {
-        throw new Error(`PI_SHELL_VIEW_TIMEOUT must be a positive number of seconds, got ${JSON.stringify(raw)}`);
+        throw new Error(`LUNE_SHELL_INSPECTOR_TIMEOUT must be a positive number of seconds, got ${JSON.stringify(raw)}`);
     }
     return seconds;
 }

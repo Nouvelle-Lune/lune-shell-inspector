@@ -1,5 +1,5 @@
 /**
- * Shared test harness for pi-shell-view.
+ * Shared test harness for lune-shell-inspector.
  *
  * The extension is a wrapper around pi's built-in `bash` tool with two execution paths:
  * - foreground (the default): the call is delegated to `createBashTool(ctx.cwd)` unchanged and is
@@ -10,6 +10,10 @@
  * Around both paths it keeps a `ShellManager` alive: `session_start` subscribes and renders the
  * shell dock through `ctx.ui.setWidget`, every job mutation re-renders it, and `session_shutdown`
  * unsubscribes and clears it.
+ *
+ * The extension registers two tools: the `bash` wrapper described here and `background_shell`, the
+ * inspector for the jobs the wrapper starts. Only `bash` needs the bash-specific driver below;
+ * the inspector's definition is looked up through {@link loadRegisteredTool}.
  *
  * The harness reproduces only what the extension actually consumes from pi:
  * - a minimal fake host that captures registered tools and `pi.on` handlers, so a test can fire
@@ -35,7 +39,7 @@ import type {
     ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
-import shellViewExtension from "../src/index.ts";
+import luneShellInspectorExtension from "../src/index.ts";
 import { shellManager, type ShellJob } from "../src/shell/shell-manager.ts";
 
 /** Tool definition the extension registers; the parameter schema stays opaque for the harness. */
@@ -100,7 +104,7 @@ export function requireError(run: BashRun): Error {
 
 /** Create an isolated working directory for a loaded extension or a command. */
 export function createTempWorkDir(label: string): string {
-    return mkdtempSync(join(tmpdir(), `pi-shell-view-${label}-`));
+    return mkdtempSync(join(tmpdir(), `lune-shell-inspector-${label}-`));
 }
 
 /** Remove a directory created by {@link createTempWorkDir}. */
@@ -337,7 +341,7 @@ export function registerExtension(cwd: string): FakePiHost {
 
     process.chdir(cwd);
     try {
-        shellViewExtension(api);
+        luneShellInspectorExtension(api);
     } finally {
         process.chdir(previousCwd);
     }
@@ -355,13 +359,18 @@ export function registerExtension(cwd: string): FakePiHost {
     };
 }
 
-/** The `bash` tool the extension registers for a load-time working directory of `cwd`. */
-export function loadBashTool(cwd: string): BashToolDefinition {
-    const tool = registerExtension(cwd).registeredTools.find((entry) => entry.name === "bash");
+/** The tool definition the extension registered under `name`, for a load-time cwd of `cwd`. */
+export function loadRegisteredTool(cwd: string, name: string): BashToolDefinition {
+    const tool = registerExtension(cwd).registeredTools.find((entry) => entry.name === name);
     if (!tool) {
-        throw new Error('pi-shell-view did not register a "bash" tool');
+        throw new Error(`lune-shell-inspector did not register a "${name}" tool`);
     }
     return tool;
+}
+
+/** The `bash` tool the extension registers for a load-time working directory of `cwd`. */
+export function loadBashTool(cwd: string): BashToolDefinition {
+    return loadRegisteredTool(cwd, "bash");
 }
 
 /**
@@ -406,7 +415,7 @@ export async function openSession(
     const host = registerExtension(cwd);
     const tool = host.registeredTools.find((entry) => entry.name === "bash");
     if (!tool) {
-        throw new Error('pi-shell-view did not register a "bash" tool');
+        throw new Error('lune-shell-inspector did not register a "bash" tool');
     }
     const ui = options.ui ?? createFakeUi();
     const ctx = createFakeContext(cwd, { ...options, ui });

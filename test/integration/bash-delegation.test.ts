@@ -27,7 +27,7 @@ import {
     type ExtensionSession,
 } from "../harness.ts";
 
-describe("pi-shell-view bash delegation", () => {
+describe("lune-shell-inspector bash delegation", () => {
     let workDir: string;
     let session: ExtensionSession;
 

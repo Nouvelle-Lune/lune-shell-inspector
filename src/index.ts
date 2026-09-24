@@ -6,7 +6,7 @@ import { shellManager } from "./shell/shell-manager.ts"
 
 import { openShellInspector } from "./shell/shell-inspector.ts";
 
-import { BashTool } from "./tools/bash-tool.ts";
+import { BashTool, BackgroundShellTool } from "./tools/bash-tool.ts";
 import { registerBackgroundShellNotifications } from "./shell/shell-notification.ts";
 
 export default function (pi: ExtensionAPI): void {
@@ -55,7 +55,10 @@ export default function (pi: ExtensionAPI): void {
     });
 
     // Register tools
+    // `background_shell` only reads the shared shell manager, so it ships with the wrapper that
+    // starts the jobs; a separate extension could not see them.
     pi.registerTool(BashTool());
+    pi.registerTool(BackgroundShellTool());
 
     // Register commands
     pi.registerCommand("shell", {

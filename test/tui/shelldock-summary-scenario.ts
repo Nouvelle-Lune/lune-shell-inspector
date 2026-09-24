@@ -19,8 +19,8 @@
  * The pauses between the turns are what make the shapes readable: a background call returns
  * immediately, so without them the next turn's shells would land in the same TUI frame and the
  * completed-only and mixed lines would never be drawn. The sequence is fixed on purpose:
- * `PI_SHELL_VIEW_COMMAND`, `PI_SHELL_VIEW_FIXTURE`, `PI_SHELL_VIEW_TIMEOUT` and
- * `PI_SHELL_VIEW_MODE` are ignored here (the launcher passes them only to the fixture scenario).
+ * `LUNE_SHELL_INSPECTOR_COMMAND`, `LUNE_SHELL_INSPECTOR_FIXTURE`, `LUNE_SHELL_INSPECTOR_TIMEOUT` and
+ * `LUNE_SHELL_INSPECTOR_MODE` are ignored here (the launcher passes them only to the fixture scenario).
  */
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseFactory } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

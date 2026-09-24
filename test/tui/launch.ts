@@ -1,5 +1,5 @@
 /**
- * Launcher for the real-pi-TUI observer of pi-shell-view.
+ * Launcher for the real-pi-TUI observer of lune-shell-inspector.
  *
  * Starts the real `pi` binary in interactive mode, loading this directory's scripted provider plus
  * the repository's `src/index.ts`. A deterministic faux model then asks for bash tool calls, which
@@ -16,7 +16,7 @@
  *   the foreground, and a long task that may continue independently runs in the background and
  *   appears in the dock and the `/shell` inspector.
  * - `fixture`: one scripted bash call, for the row's (foreground, default) or the dock's
- *   (background, `PI_SHELL_VIEW_MODE=background`) behaviour. Selected with a fixture id.
+ *   (background, `LUNE_SHELL_INSPECTOR_MODE=background`) behaviour. Selected with a fixture id.
  * - `shelldocksum`: `shelldock-summary-scenario.ts` queues four scripted turns of background bash
  *   calls that walk the dock through every summary shape (one running, one completed, mixed counts,
  *   a failed shell), so the line can be read in the real TUI. Its first turn streams the
@@ -32,7 +32,7 @@
  * Observation only: nothing here asserts anything, the human watching the screen does.
  *
  * Usage: npm run tui:demo [-- <fixture-id>|selection|shelldocksum|subagent]
- *        PI_SHELL_VIEW_COMMAND=... npm run tui:demo
+ *        LUNE_SHELL_INSPECTOR_COMMAND=... npm run tui:demo
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -40,7 +40,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Fixture driven when neither the positional argument nor `PI_SHELL_VIEW_FIXTURE` is given. */
+/** Fixture driven when neither the positional argument nor `LUNE_SHELL_INSPECTOR_FIXTURE` is given. */
 const DEFAULT_FIXTURE_ID = "progress";
 
 /** Default scenario: the two execution modes chosen side by side. */
@@ -53,17 +53,17 @@ const SUBAGENT_SCENARIO = "subagent";
 const SHELLDOCK_SUMMARY_SCENARIO = "shelldocksum";
 
 /** Observer variables read by the scenario scripts; forwarded to the child process. */
-const PI_SHELL_VIEW_VARS = [
-    "PI_SHELL_VIEW_SCENARIO",
-    "PI_SHELL_VIEW_FIXTURE",
-    "PI_SHELL_VIEW_COMMAND",
-    "PI_SHELL_VIEW_MODE",
-    "PI_SHELL_VIEW_PROBE_COMMAND",
-    "PI_SHELL_VIEW_TIMEOUT",
+const LUNE_SHELL_INSPECTOR_VARS = [
+    "LUNE_SHELL_INSPECTOR_SCENARIO",
+    "LUNE_SHELL_INSPECTOR_FIXTURE",
+    "LUNE_SHELL_INSPECTOR_COMMAND",
+    "LUNE_SHELL_INSPECTOR_MODE",
+    "LUNE_SHELL_INSPECTOR_PROBE_COMMAND",
+    "LUNE_SHELL_INSPECTOR_TIMEOUT",
 ] as const;
 
 const USAGE = `Usage: npm run tui:demo [-- <fixture-id>|selection|shelldocksum|subagent]
-       PI_SHELL_VIEW_COMMAND=... npm run tui:demo
+       LUNE_SHELL_INSPECTOR_COMMAND=... npm run tui:demo
 
 Starts the real pi TUI with a scripted faux model and the extension in src/index.ts; the model asks
 for real bash tool calls. A foreground call (mode omitted) is delegated to pi's built-in bash tool,
@@ -78,15 +78,15 @@ runs in the foreground, a long task that may continue independently runs in the 
   npm run tui:demo -- failing             # fixture id from test/fixtures/long-running-scripts.ts
   npm run tui:demo -- shelldocksum        # every shell dock summary shape, one after another
   npm run tui:demo -- subagent            # shell dock + pi-subagents widget at the same time
-  PI_SHELL_VIEW_COMMAND="ls -la" npm run tui:demo
-  PI_SHELL_VIEW_MODE=background npm run tui:demo -- flood
-  PI_SHELL_VIEW_TIMEOUT=5 npm run tui:demo -- flood
+  LUNE_SHELL_INSPECTOR_COMMAND="ls -la" npm run tui:demo
+  LUNE_SHELL_INSPECTOR_MODE=background npm run tui:demo -- flood
+  LUNE_SHELL_INSPECTOR_TIMEOUT=5 npm run tui:demo -- flood
 
 The subagent scenario needs pi-subagents: it is looked up at PI_SUBAGENTS_EXTENSION, then
 <repo>/node_modules/pi-subagents/index.js, then ~/.pi/agent/npm/node_modules/pi-subagents/index.js.
 It runs an offline probe agent (registered by test/tui/subagent-scenario.ts) whose own bash command
-is configurable with PI_SHELL_VIEW_PROBE_COMMAND; the parent's background bash command stays
-PI_SHELL_VIEW_COMMAND.
+is configurable with LUNE_SHELL_INSPECTOR_PROBE_COMMAND; the parent's background bash command stays
+LUNE_SHELL_INSPECTOR_COMMAND.
 
 What to watch for in the selection scenario (default):
 
@@ -101,13 +101,13 @@ What to watch for in the selection scenario (default):
 3. the closing text arrives after the shell settled, so the dock turns into
    "1 shell completed in <Ns> · /shell to open" and /shell still shows the finished job.
 
-The background command is the long-output fixture by default; PI_SHELL_VIEW_FIXTURE,
-PI_SHELL_VIEW_COMMAND and PI_SHELL_VIEW_TIMEOUT change what runs in the background.
+The background command is the long-output fixture by default; LUNE_SHELL_INSPECTOR_FIXTURE,
+LUNE_SHELL_INSPECTOR_COMMAND and LUNE_SHELL_INSPECTOR_TIMEOUT change what runs in the background.
 
-What to watch for in a fixture run ("npm run tui:demo -- <id>" or PI_SHELL_VIEW_FIXTURE=<id>):
+What to watch for in a fixture run ("npm run tui:demo -- <id>" or LUNE_SHELL_INSPECTOR_FIXTURE=<id>):
 foreground (the default) draws the "$ <command>" row pi streams and settles - success, truncation
 warning or the failure text for a failing fixture - with no dock entry. With
-PI_SHELL_VIEW_MODE=background the same fixture runs as a managed shell job instead: the transcript
+LUNE_SHELL_INSPECTOR_MODE=background the same fixture runs as a managed shell job instead: the transcript
 row stays empty, the dock reports the job, and /shell shows it. A non-zero exit fails the job
 carrying its exit code, like a timeout does with its own reason.
 
@@ -144,7 +144,7 @@ function positional(argv: string[]): string | undefined {
     return argv[0];
 }
 
-/** Scenario named by the positional argument or `PI_SHELL_VIEW_SCENARIO`, if any. */
+/** Scenario named by the positional argument or `LUNE_SHELL_INSPECTOR_SCENARIO`, if any. */
 type TuiScenario =
     | typeof BASH_SELECTION_SCENARIO
     | typeof SHELLDOCK_SUMMARY_SCENARIO
@@ -160,26 +160,26 @@ function isScenario(selection: string | undefined): selection is TuiScenario {
 /**
  * Scenario of this run.
  *
- * A positional or `PI_SHELL_VIEW_SCENARIO` scenario id wins; a positional or `PI_SHELL_VIEW_FIXTURE`
+ * A positional or `LUNE_SHELL_INSPECTOR_SCENARIO` scenario id wins; a positional or `LUNE_SHELL_INSPECTOR_FIXTURE`
  * fixture id keeps the single-call fixture scenario; with nothing selected at all the default is the
  * scenario that shows foreground/background selection.
  */
 function selectedScenario(argv: string[]): TuiScenario | undefined {
-    const selection = positional(argv) ?? process.env.PI_SHELL_VIEW_SCENARIO;
+    const selection = positional(argv) ?? process.env.LUNE_SHELL_INSPECTOR_SCENARIO;
     if (isScenario(selection)) {
         return selection;
     }
 
-    if (positional(argv) !== undefined || process.env.PI_SHELL_VIEW_FIXTURE !== undefined) {
+    if (positional(argv) !== undefined || process.env.LUNE_SHELL_INSPECTOR_FIXTURE !== undefined) {
         return undefined;
     }
 
     return BASH_SELECTION_SCENARIO;
 }
 
-/** Fixture id of this run: positional argument first, then `PI_SHELL_VIEW_FIXTURE`, then the default. */
+/** Fixture id of this run: positional argument first, then `LUNE_SHELL_INSPECTOR_FIXTURE`, then the default. */
 function fixtureId(argv: string[]): string {
-    return positional(argv) ?? process.env.PI_SHELL_VIEW_FIXTURE ?? DEFAULT_FIXTURE_ID;
+    return positional(argv) ?? process.env.LUNE_SHELL_INSPECTOR_FIXTURE ?? DEFAULT_FIXTURE_ID;
 }
 
 /**
@@ -215,7 +215,7 @@ function resolveSubagentExtension(): string {
 /** Child environment: the launcher's environment with the observer variables copied across. */
 function childEnv(): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = { ...process.env };
-    for (const name of PI_SHELL_VIEW_VARS) {
+    for (const name of LUNE_SHELL_INSPECTOR_VARS) {
         const value = process.env[name];
         if (value !== undefined) {
             env[name] = value;
@@ -261,18 +261,18 @@ function main(): void {
         "-ns",
         "--offline",
         scenario === SUBAGENT_SCENARIO
-            ? "run the shell-view subagent fixture"
+            ? "run the lune-shell-inspector subagent fixture"
             : scenario === SHELLDOCK_SUMMARY_SCENARIO
-                ? "run the shell-view dock summary fixture"
+                ? "run the lune-shell-inspector dock summary fixture"
                 : scenario === BASH_SELECTION_SCENARIO
-                    ? "run the shell-view bash selection fixture"
-                    : "run the shell-view fixture",
+                    ? "run the lune-shell-inspector bash selection fixture"
+                    : "run the lune-shell-inspector fixture",
     ];
 
     const child = spawn("pi", args, {
         stdio: "inherit",
         // Only the fixture scenario reads the fixture id; a scenario ignores it.
-        env: scenario === undefined ? { ...childEnv(), PI_SHELL_VIEW_FIXTURE: fixtureId(argv) } : childEnv(),
+        env: scenario === undefined ? { ...childEnv(), LUNE_SHELL_INSPECTOR_FIXTURE: fixtureId(argv) } : childEnv(),
     });
 
     child.on("error", (error) => {

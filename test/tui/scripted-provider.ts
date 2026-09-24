@@ -9,11 +9,11 @@
  * with pi's built-in bash renderers) or starts a managed shell job (background, no transcript row).
  *
  * Selection (all optional, no silent fallback):
- * - `PI_SHELL_VIEW_COMMAND` replaces the command outright, for ad-hoc observation of any long task.
- * - `PI_SHELL_VIEW_FIXTURE` picks a fixture from `test/fixtures/long-running-scripts.ts` by id
+ * - `LUNE_SHELL_INSPECTOR_COMMAND` replaces the command outright, for ad-hoc observation of any long task.
+ * - `LUNE_SHELL_INSPECTOR_FIXTURE` picks a fixture from `test/fixtures/long-running-scripts.ts` by id
  *   (default `progress`); an unknown id throws while this extension loads.
- * - `PI_SHELL_VIEW_TIMEOUT` is forwarded to the bash tool as its timeout in seconds.
- * - `PI_SHELL_VIEW_MODE` is `foreground` (default, row streams the output) or `background` (the call
+ * - `LUNE_SHELL_INSPECTOR_TIMEOUT` is forwarded to the bash tool as its timeout in seconds.
+ * - `LUNE_SHELL_INSPECTOR_MODE` is `foreground` (default, row streams the output) or `background` (the call
  *   returns immediately and the shell dock appears while the job runs).
  */
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
@@ -21,7 +21,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { getFixture } from "../fixtures/long-running-scripts.ts";
 
-/** Fixture driven when `PI_SHELL_VIEW_FIXTURE` is unset. */
+/** Fixture driven when `LUNE_SHELL_INSPECTOR_FIXTURE` is unset. */
 const DEFAULT_FIXTURE_ID = "progress";
 
 /** Single line the scripted model answers after the tool result; the queue ends here. */
@@ -29,25 +29,25 @@ const FINAL_TEXT = "fixture finished";
 
 /** Command of the scripted bash call: an explicit override wins, otherwise the fixture's command. */
 function scriptedCommand(): string {
-    const override = process.env.PI_SHELL_VIEW_COMMAND;
+    const override = process.env.LUNE_SHELL_INSPECTOR_COMMAND;
     if (override !== undefined) {
         return override;
     }
-    const fixtureId = process.env.PI_SHELL_VIEW_FIXTURE ?? DEFAULT_FIXTURE_ID;
+    const fixtureId = process.env.LUNE_SHELL_INSPECTOR_FIXTURE ?? DEFAULT_FIXTURE_ID;
     // getFixture throws on unknown ids, so a typo surfaces while the extension loads instead of
     // quietly running a different fixture.
     return getFixture(fixtureId).command;
 }
 
-/** Timeout in seconds for the scripted bash call, or undefined when `PI_SHELL_VIEW_TIMEOUT` is unset. */
+/** Timeout in seconds for the scripted bash call, or undefined when `LUNE_SHELL_INSPECTOR_TIMEOUT` is unset. */
 function scriptedTimeoutSeconds(): number | undefined {
-    const raw = process.env.PI_SHELL_VIEW_TIMEOUT;
+    const raw = process.env.LUNE_SHELL_INSPECTOR_TIMEOUT;
     if (raw === undefined) {
         return undefined;
     }
     const seconds = Number(raw);
     if (!Number.isFinite(seconds) || seconds <= 0) {
-        throw new Error(`PI_SHELL_VIEW_TIMEOUT must be a positive number of seconds, got ${JSON.stringify(raw)}`);
+        throw new Error(`LUNE_SHELL_INSPECTOR_TIMEOUT must be a positive number of seconds, got ${JSON.stringify(raw)}`);
     }
     return seconds;
 }
@@ -59,12 +59,12 @@ function scriptedTimeoutSeconds(): number | undefined {
  * the call a managed shell job and moves the observation to the dock and the `/shell` inspector.
  */
 function scriptedMode(): "foreground" | "background" {
-    const raw = process.env.PI_SHELL_VIEW_MODE;
+    const raw = process.env.LUNE_SHELL_INSPECTOR_MODE;
     if (raw === undefined) {
         return "foreground";
     }
     if (raw !== "foreground" && raw !== "background") {
-        throw new Error(`PI_SHELL_VIEW_MODE must be "foreground" or "background", got ${JSON.stringify(raw)}`);
+        throw new Error(`LUNE_SHELL_INSPECTOR_MODE must be "foreground" or "background", got ${JSON.stringify(raw)}`);
     }
     return raw;
 }

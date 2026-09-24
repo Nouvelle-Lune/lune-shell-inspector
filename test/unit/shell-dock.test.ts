@@ -25,7 +25,7 @@ import { createFakeContext, createFakeUi, type FakeExtensionUi } from "../harnes
  * pi keys widgets by this string, so it is part of the extension's external contract: changing it
  * changes where the dock appears relative to other extensions' widgets.
  */
-const WIDGET_KEY = "pi-shell-view";
+const WIDGET_KEY = "lune-shell-inspector";
 
 /** Start one job and settle it into `status`. */
 function addJob(id: string, command: string, status: ShellJobStatus = "running"): void {

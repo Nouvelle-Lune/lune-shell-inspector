@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { shellManager } from "./shell-manager.ts";
 
 
-const WIDGET_ID = "pi-shell-view";
+const WIDGET_ID = "lune-shell-inspector";
 const PADDING = "";
 
 export class ShellDock {

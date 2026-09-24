@@ -1,5 +1,5 @@
 /**
- * Session lifecycle contract of pi-shell-view.
+ * Session lifecycle contract of lune-shell-inspector.
  *
  * The extension keeps the shared `ShellManager` in sync with the session: `session_start` empties
  * the job list (aborting any shell the previous session left running), renders the dock and
@@ -27,7 +27,7 @@ import {
 } from "../harness.ts";
 
 /** Widget key the shell dock uses. */
-const WIDGET_ID = "pi-shell-view";
+const WIDGET_ID = "lune-shell-inspector";
 
 /** Run a session and always shut it down again, even when the test fails. */
 async function withSession(
@@ -78,7 +78,7 @@ function startJob(id: string, command: string, cwd: string): AbortController {
     return controller;
 }
 
-describe("pi-shell-view session lifecycle", () => {
+describe("lune-shell-inspector session lifecycle", () => {
     beforeEach(() => {
         shellManager.clearAllJobs();
     });

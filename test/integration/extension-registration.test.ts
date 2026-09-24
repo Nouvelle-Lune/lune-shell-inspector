@@ -1,14 +1,16 @@
 /**
- * Registration contract of pi-shell-view.
+ * Registration contract of lune-shell-inspector.
  *
  * The extension replaces pi's built-in `bash` tool by registering another definition under the same
- * name. These tests assert what pi receives at load time: exactly one tool, the built-in metadata
- * (description, prompt snippet/guidelines, constrained sampling) plus the wrapper's own optional
- * `mode` parameter, and the renderer contract - pi's `withBuiltInRenderers` only fills renderers a
- * definition does not supply, so the wrapper supplies its own: foreground rows delegate to the
- * built-in bash renderers, background rows render empty. Execution behaviour is covered by
- * `test/integration/bash-delegation.test.ts` (foreground) and
- * `test/integration/background-bash.test.ts` (background mode).
+ * name, and registers `background_shell` for reading the jobs that wrapper starts. These tests
+ * assert what pi receives at load time: the two tool definitions, the built-in metadata
+ * (description base, constrained sampling) plus the wrapper's own optional `mode` parameter and
+ * prompt metadata, `background_shell`'s jobs schema, and the renderer contract - pi's
+ * `withBuiltInRenderers` only fills renderers a definition does not supply, so the wrapper supplies
+ * its own: foreground rows delegate to the built-in bash renderers, background rows render empty.
+ * Execution behaviour is covered by `test/integration/bash-delegation.test.ts` (foreground),
+ * `test/integration/background-bash.test.ts` (background mode) and
+ * `test/integration/background-shell-tool.test.ts` (inspection).
  */
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
@@ -22,6 +24,7 @@ import {
     createBuiltInBash,
     createBuiltInBashDefinition,
     createTempWorkDir,
+    loadRegisteredTool,
     registerExtension,
     removeTempWorkDir,
     type BashToolDefinition,
@@ -65,7 +68,7 @@ function plainText(lines: readonly string[]): string {
     return lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
 }
 
-describe("pi-shell-view registration", () => {
+describe("lune-shell-inspector registration", () => {
     let workDir: string;
     let tool: BashToolDefinition;
 
@@ -83,19 +86,22 @@ describe("pi-shell-view registration", () => {
         removeTempWorkDir(workDir);
     });
 
-    it("registers exactly one tool named bash that mirrors the built-in definition", () => {
-        // Contract: loading the extension registers a single tool named "bash" whose label and
-        // prompt metadata come from the built-in createBashTool(cwd), so the model sees the same
-        // tool contract and this wrapper cannot drift from it. The description is the built-in one
-        // plus the wrapper's own guidance for its background mode.
+    it("registers the bash wrapper plus the background_shell inspector", () => {
+        // Contract: the wrapper replaces the built-in tool under the same name, so pi uses it
+        // instead of the built-in one, and `background_shell` reads the jobs that wrapper starts.
+        // Both come from one extension because they share the module-level shell manager. The
+        // description is the built-in one plus the wrapper's own guidance for background mode.
         const registered = registerExtension(workDir).registeredTools;
-        assert.equal(registered.length, 1, "the extension must register exactly one tool");
+        assert.deepEqual(
+            registered.map((entry) => entry.name),
+            ["bash", "background_shell"],
+            "the extension must register the bash wrapper and the background_shell inspector",
+        );
 
-        const registeredTool = registered.at(0);
-        assert.ok(registeredTool, "expected one registered tool");
+        const registeredTool = registered.find((entry) => entry.name === "bash");
+        assert.ok(registeredTool, "expected the bash wrapper");
         const builtIn = createBuiltInBash(workDir);
 
-        assert.equal(registeredTool.name, "bash", "the tool must be named bash so it replaces the built-in one");
         assert.equal(registeredTool.label, "bash");
         assert.ok(
             (registeredTool.description ?? "").startsWith(builtIn.description ?? ""),
@@ -103,19 +109,66 @@ describe("pi-shell-view registration", () => {
         );
         assert.match(
             registeredTool.description ?? "",
-            /normally run in background mode so their output remains observable/,
+            /Background mode runs the command asynchronously and returns immediately/,
             "the wrapper must document its own background mode",
         );
-        assert.equal(registeredTool.promptSnippet, builtIn.promptSnippet, "prompt snippet must come from the built-in tool");
-        assert.deepEqual(
-            registeredTool.promptGuidelines,
-            builtIn.promptGuidelines,
-            "prompt guidelines must come from the built-in tool",
+
+        // The wrapper must advertise its own background mode: inheriting the built-in snippet and
+        // guidelines would leave the `mode` parameter undocumented in the system prompt.
+        assert.doesNotMatch(
+            builtIn.promptSnippet ?? "",
+            /background/i,
+            "guard: the built-in snippet must not already cover background mode",
         );
+        assert.match(
+            registeredTool.promptSnippet ?? "",
+            /background/i,
+            "the wrapper's prompt snippet must cover background mode",
+        );
+        const guidelines = registeredTool.promptGuidelines ?? [];
+        assert.ok(
+            guidelines.some((line) => /background/i.test(line)),
+            "the wrapper's prompt guidelines must cover background mode",
+        );
+        assert.ok(
+            guidelines.some((line) => /foreground/i.test(line)),
+            "the wrapper's prompt guidelines must cover foreground mode",
+        );
+
         assert.deepEqual(
             registeredTool.constrainedSampling,
             builtIn.constrainedSampling,
             "constrained sampling must come from the built-in tool",
+        );
+    });
+
+    it("registers background_shell with the jobs schema and its own prompt metadata", () => {
+        // Contract: the inspector takes an optional `jobs` array - omitted or empty both mean "list
+        // every shell" - whose entries carry the id to inspect and the per-job output opt-in.
+        const tool = loadRegisteredTool(workDir, "background_shell");
+        const schema = tool.parameters as TSchema;
+
+        assert.equal(Value.Check(schema, {}), true, "omitting jobs must list every shell");
+        assert.equal(Value.Check(schema, { jobs: [] }), true, "an empty jobs array must list every shell");
+        assert.equal(Value.Check(schema, { jobs: [{ jobID: "call-1" }] }), true);
+        assert.equal(
+            Value.Check(schema, { jobs: [{ jobID: "call-1", includeOutput: true }] }),
+            true,
+            "includeOutput must be accepted as a boolean",
+        );
+        assert.equal(
+            Value.Check(schema, { jobs: [{ jobID: "call-1", includeOutput: "yes" }] }),
+            false,
+            "includeOutput must stay a boolean",
+        );
+        assert.equal(Value.Check(schema, { jobs: [{}] }), false, "an entry without jobID must be rejected");
+        assert.equal(Value.Check(schema, { jobs: "call-1" }), false, "jobs must be an array");
+
+        assert.match(tool.description, /background shells/i);
+        assert.match(tool.promptSnippet ?? "", /background shells/i, "the tool must be advertised in the system prompt");
+        assert.ok(
+            (tool.promptGuidelines ?? []).some((line) => /intermediate output/i.test(line)),
+            "the guidelines must explain when to pull intermediate output",
         );
     });
 
