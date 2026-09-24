@@ -19,7 +19,13 @@ Lune Shell Inspector lets Pi keep long-running commands visible and manageable w
 
 ## Quick start
 
-Install from GitHub:
+Install from npm:
+
+```bash
+pi install npm:lune-shell-inspector
+```
+
+or straight from GitHub:
 
 ```bash
 pi install git:github.com/Nouvelle-Lune/lune-shell-inspector
@@ -109,9 +115,7 @@ npm run typecheck
 npm run tui:demo
 ```
 
-## Compatibility
-
-Targets the Pi `0.86.x` API line.
+`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, and `typebox` are supplied by the Pi host at runtime, so the package declares them as `peerDependencies` with a `"*"` range and never bundles them. They are repeated in `devDependencies` so local typecheck and tests resolve the same modules Pi injects.
 
 ## License
 
