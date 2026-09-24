@@ -115,4 +115,4 @@ Targets the Pi `0.86.x` API line.
 
 ## License
 
-ISC
+MIT
