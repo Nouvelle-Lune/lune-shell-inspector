@@ -129,13 +129,28 @@ describe("shell inspector", () => {
         return { lines: inspector.render(WIDTH), fgCalls: [...stub.fgCalls] };
     }
 
-    /** Output rows of the right pane, in render order. */
+    /**
+     * Output rows of the right pane, in render order.
+     *
+     * Output starts on the row after the `Output · …` header. The body pads the rest of the pane
+     * with blank rows, so only trailing blanks are padding - a blank line inside the output itself
+     * is real and must stay.
+     */
     function visibleOutput(): string[] {
-        return frame()
-            .lines
-            .map(rightCell)
-            .filter((cell) => cell.startsWith("├─ ") || cell.startsWith("└─ "))
-            .map((cell) => cell.slice(3));
+        const cells = frame().lines.map(rightCell);
+        const headerIndex = cells.findIndex((cell) => cell.startsWith("Output ·"));
+
+        if (headerIndex < 0) {
+            return [];
+        }
+
+        const rows = cells.slice(headerIndex + 1);
+
+        while (rows.at(-1) === "") {
+            rows.pop();
+        }
+
+        return rows;
     }
 
     /** The paused marker of the newest frame, if its `Output` header drew one. */

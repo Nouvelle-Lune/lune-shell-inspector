@@ -277,27 +277,19 @@ export class ShellInspector implements Component {
         // padded cell wide: the pane width minus the two padding columns.
         const contentWidth = width - 2;
 
-        const title =
-            this.theme.bold("Shell inspector") +
-            this.theme.fg("muted", " · live controls");
+        const title = this.theme.bold("Shell inspector");
 
         const status = this.renderHeaderStatus(
-            Math.max(16, contentWidth - visibleWidth(title) - 2),
-        );
-
-        const titleText = truncateToWidth(
-            title,
-            Math.max(0, contentWidth - visibleWidth(status) - 2),
-            "…",
+            Math.max(0, contentWidth - visibleWidth(title) - 1),
         );
 
         return this.cell(
-            titleText +
+            title +
             " ".repeat(
                 Math.max(
                     1,
                     contentWidth -
-                    visibleWidth(titleText) -
+                    visibleWidth(title) -
                     visibleWidth(status),
                 ),
             ) +
@@ -307,31 +299,16 @@ export class ShellInspector implements Component {
     }
 
     private renderHeaderStatus(maxWidth: number): string {
-        const running = shellManager.getRunningJobsList();
-        const latest = running[running.length - 1];
+        const total = shellManager.getAllJobsList().length;
+        const running = shellManager.jobsStatusStat.runningCount;
+        const shells = `${total} ${total === 1 ? "shell" : "shells"}`;
 
-        if (!latest) {
-            return this.theme.fg(
-                "muted",
-                truncateToWidth(
-                    `● ${shellManager.getAllJobsList().length} shells · idle`,
-                    maxWidth,
-                    "…",
-                ),
-            );
-        }
+        const text = this.theme.fg("muted", shells) +
+            (running > 0
+                ? this.theme.fg("accent", ` · ${running} running`)
+                : "");
 
-        // Only the command is truncated: clipping the suffix instead would
-        // render "· runni…" and lose the state the header exists to show.
-        const suffix = this.theme.fg("muted", " · running");
-
-        const name = truncateToWidth(
-            latest.command,
-            Math.max(4, maxWidth - visibleWidth(suffix) - 2),
-            "…",
-        );
-
-        return this.theme.fg("accent", "●") + ` ${name}${suffix}`;
+        return truncateToWidth(text, maxWidth, "…");
     }
 
     /** Render the footer of the shell inspector. */
@@ -339,7 +316,7 @@ export class ShellInspector implements Component {
         return this.cell(
             this.theme.fg(
                 "dim",
-                "↑/k/↓/j shell · ⇧↑/⇧↓ scroll · Home/End · Esc close",
+                "↑↓/jk shell · ⇧↑↓/jk scroll · Home/End · Esc close",
             ),
             width,
         );
@@ -379,7 +356,11 @@ export class ShellInspector implements Component {
                 contentWidth - 5 - visibleWidth(status),
             );
 
-            const name = truncateToWidth(job.command, nameWidth, "…");
+            const name = selected
+                ? this.theme.bold(
+                    truncateToWidth(job.command, nameWidth, "…"),
+                )
+                : truncateToWidth(job.command, nameWidth, "…");
 
             const gap = Math.max(
                 1,
@@ -410,48 +391,23 @@ export class ShellInspector implements Component {
         const contentWidth = width - 2;
 
         const color = statusColor(job.status);
-        const status = this.theme.fg(color, job.status);
 
-        const nameWidth = Math.max(
-            4,
-            contentWidth - 3 - visibleWidth(status),
-        );
-
-        const name = this.theme.bold(
-            truncateToWidth(job.command, nameWidth, "…"),
-        );
-
-        const gap = Math.max(
-            1,
-            contentWidth -
-            2 -
-            visibleWidth(name) -
-            visibleWidth(status),
+        const command = this.theme.bold(
+            truncateToWidth(job.command, Math.max(4, contentWidth - 2), "…"),
         );
 
         const rows: string[] = [
-            this.cell(
-                `${this.theme.fg(color, "●")} ${name}` +
-                `${" ".repeat(gap)}${status}`,
-                width,
+            this.cell(`${this.theme.fg(color, "●")} ${command}`, width),
+            ...this.wrap(
+                this.theme.fg(color, job.status) +
+                this.theme.fg("muted", ` · ${jobMeta(job)}`),
+                contentWidth,
             ),
         ];
 
-        rows.push(
-            ...this.wrap(jobMeta(job), contentWidth, "muted"),
-            ...this.wrap(
-                this.theme.fg("accent", "Task") + `: ${job.command}`,
-                contentWidth,
-            ),
-        );
-
         if (job.error) {
             rows.push(
-                ...this.wrap(
-                    this.theme.fg("error", "Error") + `: ${job.error}`,
-                    contentWidth,
-                    "error",
-                ),
+                ...this.wrap(`Error: ${job.error}`, contentWidth, "error"),
             );
         }
 
@@ -468,8 +424,6 @@ export class ShellInspector implements Component {
                 "muted",
                 ` · ${output.length} ${output.length === 1 ? "line" : "lines"}`,
             ),
-            this.theme.fg("muted", " · "),
-            this.theme.fg(color, job.status),
         ];
 
         if (window.newestHidden > 0) {
@@ -489,7 +443,6 @@ export class ShellInspector implements Component {
         if (output.length === 0) {
             rows.push(
                 this.cell(
-                    this.theme.fg("dim", "└─ ") +
                     this.theme.fg(
                         "muted",
                         job.status === "running"
@@ -505,17 +458,8 @@ export class ShellInspector implements Component {
                 window.start + window.count,
             );
 
-            for (const [index, line] of visible.entries()) {
-                rows.push(
-                    this.cell(
-                        this.theme.fg(
-                            "dim",
-                            index === visible.length - 1 ? "└─ " : "├─ ",
-                        ) +
-                        truncateToWidth(line, contentWidth - 3, "…"),
-                        width,
-                    ),
-                );
+            for (const line of visible) {
+                rows.push(this.cell(line, width));
             }
         }
 
@@ -663,9 +607,7 @@ function statusColor(status: ShellJobStatus): ThemeColor {
 
 function jobMeta(job: Readonly<ShellJob>): string {
     const parts = [
-        job.status === "running" ? "live" : "exited",
         job.cwd,
-        job.id.slice(0, 6),
         formatDuration((job.finishedAt ?? Date.now()) - job.startedAt),
     ];
 
