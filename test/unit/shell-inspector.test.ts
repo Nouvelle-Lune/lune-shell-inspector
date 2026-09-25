@@ -1,5 +1,5 @@
 /**
- * Unit tests for the shell inspector's output scrolling.
+ * Unit tests for the shell inspector's keys: output scrolling and killing the selected shell.
  *
  * The inspector renders the selected job's output tail in a fixed pane, and the scroll keys shift
  * which lines that pane shows: Shift+Up/Shift+K one line older, Shift+Down/Shift+J one line newer,
@@ -7,9 +7,15 @@
  * it is what the pane returns to once the newest line is in view again - scrolling is a pause, not
  * a mode. Switching jobs always shows the newly selected job's newest output.
  *
+ * `x` settles the selected job through the manager as killed, with the reason the pane shows. It is
+ * a destructive key without a confirmation step, so the tests pin what it must and must not touch:
+ * the selected shell only - never one that already settled, and never the same shell twice - and the
+ * killed shell stays listed and readable afterwards.
+ *
  * The tests render the real component against the real `shellManager` singleton with a recording
  * stub theme, so assertions read plain strings (no ANSI) and the paused marker can be checked by
- * the color it asks for. The overlay, key routing and the real TUI are out of scope here;
+ * the color it asks for. `test/integration/inspector-kill.test.ts` presses the same key against a
+ * real background shell; the overlay, key routing and the real TUI are out of scope here, and
  * `test/tui` observes those by hand.
  */
 import assert from "node:assert/strict";
@@ -372,6 +378,102 @@ describe("shell inspector", () => {
         shellManager.settleJob("job-1", { type: "completed", exitCode: 0 });
 
         assert.deepEqual(visibleOutput(), ["suite 1 ok"]);
+    });
+
+    it("kills the selected running shell with x", async () => {
+        await addJob("job-a", "sleep 60", lineOutput(40));
+        await addJob("job-b", "tail -f b.log", lineOutput(3));
+
+        press("j");
+        const redrawsBefore = renderRequests;
+
+        press("x");
+
+        const killed = shellManager.getJob("job-b");
+        assert.ok(killed, "the killed shell must stay listed");
+        assert.equal(killed.status, "killed");
+        assert.equal(killed.error, "Shell killed by user");
+        assert.equal(killed.controller.signal.aborted, true, "killing a shell must abort its process tree");
+        assert.equal(shellManager.getJob("job-a")?.status, "running", "only the selected shell is killed");
+        assert.deepEqual(
+            shellManager.getAllJobsStatusStat(),
+            { runningCount: 1, completedCount: 0, failedCount: 0, killedCount: 1 },
+        );
+        assert.equal(renderRequests, redrawsBefore + 1, "the kill must redraw the pane");
+    });
+
+    it("kills the first shell when the selection was never moved", async () => {
+        await addJob("job-a", "sleep 60", lineOutput(40));
+        await addJob("job-b", "tail -f b.log", lineOutput(3));
+
+        press("x");
+
+        assert.equal(shellManager.getJob("job-a")?.status, "killed", "the selection starts on the first shell");
+        assert.equal(shellManager.getJob("job-b")?.status, "running");
+        assert.equal(visibleOutput().at(-1), "line 40", "the pane must keep showing the shell that was killed");
+    });
+
+    it("keeps a killed shell listed, selected and readable", async () => {
+        await addJob("job-a", "sleep 60", lineOutput(40));
+        await addJob("job-b", "tail -f b.log", lineOutput(3));
+
+        press("j");
+        press("x");
+
+        const { lines } = frame();
+        const cells = lines.map(rightCell);
+
+        assert.ok(
+            lines.some((line) => line.includes("2 shells · 1 running")),
+            `the killed shell must stay in the list: ${JSON.stringify(lines[1])}`,
+        );
+        assert.ok(
+            cells.includes("Error: Shell killed by user"),
+            `the pane must name the kill: ${JSON.stringify(cells)}`,
+        );
+        assert.deepEqual(visibleOutput(), ["line 1", "line 2", "line 3"], "the killed shell's output must stay readable");
+    });
+
+    it("refuses to kill a shell that already settled", async () => {
+        await addJob("job-1", "echo done", lineOutput(1));
+        shellManager.settleJob("job-1", { type: "completed", exitCode: 0 });
+
+        press("x");
+
+        const job = shellManager.getJob("job-1");
+        assert.ok(job);
+        assert.equal(job.status, "completed", "a settled shell must not become killed");
+        assert.equal(job.exitCode, 0);
+        assert.equal(job.error, undefined);
+        assert.equal(job.controller.signal.aborted, false, "a refused kill must not abort anything");
+        assert.deepEqual(
+            shellManager.getAllJobsStatusStat(),
+            { runningCount: 0, completedCount: 1, failedCount: 0, killedCount: 0 },
+        );
+    });
+
+    it("refuses a repeated kill of the same shell", async () => {
+        await addJob("job-1", "sleep 60", lineOutput(1));
+
+        press("x");
+        press("x");
+
+        assert.equal(shellManager.getJob("job-1")?.status, "killed");
+        assert.equal(shellManager.getJob("job-1")?.error, "Shell killed by user");
+        assert.deepEqual(
+            shellManager.getAllJobsStatusStat(),
+            { runningCount: 0, completedCount: 0, failedCount: 0, killedCount: 1 },
+            "the second kill must not count the shell twice",
+        );
+    });
+
+    it("advertises the kill key in the footer", async () => {
+        await addJob("job-1", "sleep 60", lineOutput(1));
+
+        const footer = frame().lines.at(-2) ?? "";
+
+        assert.ok(footer.includes("x to kill"), `the footer must show the kill key: ${footer}`);
+        assert.ok(footer.includes("Esc to close"), `the footer must still show the close key: ${footer}`);
     });
 
     it("truncates a wide line to the pane without changing the job's screen", async () => {

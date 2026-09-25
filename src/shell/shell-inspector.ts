@@ -120,6 +120,16 @@ export class ShellInspector implements Component {
             return;
         }
 
+        if (data === "x") {
+            const chosenJob = jobs[this.selectedIndex];
+            if (!chosenJob) { return; };
+            shellManager.settleJob(chosenJob.id, {
+                type: "killed",
+                error: "Shell killed by user"
+            });
+            return;
+        }
+
         if (matchesKey(data, Key.home)) {
             this.jumpToOldestLine();
             return;
@@ -316,7 +326,7 @@ export class ShellInspector implements Component {
         return this.cell(
             this.theme.fg(
                 "dim",
-                "↑↓/jk shell · ⇧↑↓/jk scroll · Home/End · Esc close",
+                "↑↓/jk shell · ⇧↑↓/jk scroll · Home/End · x to kill · Esc to close",
             ),
             width,
         );
