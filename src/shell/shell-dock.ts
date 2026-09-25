@@ -61,10 +61,9 @@ export class ShellDock {
 
         this.ctx.ui.setWidget(
             WIDGET_ID,
-            [this.ctx.ui.theme.fg(
-                this.selected ? "accent" : "dim",
-                `${PADDING}${summary} · /shell to open`,
-            )],
+            [
+                `${PADDING}${summary}${this.ctx.ui.theme.fg("dim", " · /shell to open")}`,
+            ],
             {
                 placement: "belowEditor",
             },
@@ -98,7 +97,11 @@ function shellDockSummary(ctx: ExtensionContext): string {
     ) {
         const runningJob = shellManager.getRunningJobsList()[0];
         const elapsedTime = Math.floor((Date.now() - runningJob!.startedAt) / 1000);
-        return (ctx.ui.theme.fg("accent", `${status.runningCount} running shell`) + ` · ${truncateOutput(runningJob!.command, 20)} · ${elapsedTime}s`);
+        return [
+            ctx.ui.theme.fg("accent", `${status.runningCount} running shell`),
+            truncateOutput(runningJob!.command, 20),
+            `${elapsedTime}s`,
+        ].join(ctx.ui.theme.fg("dim", " · "));
     }
     // only one completed shell case
     if (status.completedCount === 1 && status.runningCount === 0 && status.failedCount === 0 && status.killedCount === 0) {
@@ -124,7 +127,7 @@ function shellDockSummary(ctx: ExtensionContext): string {
         parts.push(ctx.ui.theme.fg("error", `${status.killedCount} killed`));
     }
 
-    return `${parts.join(" · ")}`;
+    return `${parts.join(ctx.ui.theme.fg("dim", " · "))}`;
 }
 
 function truncateOutput(output: string, maxLength: number): string {

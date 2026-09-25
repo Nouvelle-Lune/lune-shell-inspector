@@ -4,7 +4,10 @@
  * `ShellDock` turns the shared `ShellManager` job list into the one-line widget pi shows below the
  * editor, and its private `shellDockSummary` decides what that line says for every combination of
  * job states: one running shell (command, elapsed seconds, refresh hint), one completed shell (its
- * runtime) or the per-status count list of a mixed job list. The tests drive the real `shellManager`
+ * runtime) or the per-status count list of a mixed job list. Every segment is requested in its own
+ * status colour - accent while running, success when completed, error for failed and killed - and
+ * the ` · ` separators plus the `/shell to open` hint stay dim, so the dock never reads as one
+ * uniformly coloured block. The tests drive the real `shellManager`
  * singleton through a fake UI that records every `setWidget` and `theme.fg` call, so they assert
  * exactly what the extension asks pi to mount. How pi composes that widget with another extension's
  * widget is covered by `test/integration/subagent-widget.test.ts`; the real TUI is observed through
@@ -186,6 +189,10 @@ describe("shell dock", () => {
 
             assert.equal(line(), "1 shell completed in 4s · /shell to open");
             assert.equal(ui.widgetCalls.at(-1)?.placement, "belowEditor");
+            assert.deepEqual(ui.fgCalls, [
+                { color: "success", text: "1 shell completed" },
+                { color: "dim", text: " · /shell to open" },
+            ]);
         });
 
         it("falls back to the count list when the running shell shares the list with settled shells", () => {
@@ -246,6 +253,27 @@ describe("shell dock", () => {
             );
         });
 
+        it("draws the count list in the status colours of its segments", () => {
+            // Contract: the count list keeps the status colours of the mixed single-format cases and
+            // joins them with a dim separator; only the hint is dim as a whole.
+            addJob("running", "sleep 30");
+            addJob("completed", "echo done", "completed");
+            addJob("failed", "exit 1", "failed");
+            addJob("killed", "sleep 60", "killed");
+
+            render();
+
+            assert.ok(ui.fgCalls.some((call) => call.color === "accent" && call.text === "1 running"));
+            assert.ok(ui.fgCalls.some((call) => call.color === "success" && call.text === "1 completed"));
+            assert.ok(ui.fgCalls.some((call) => call.color === "error" && call.text === "1 failed"));
+            assert.ok(ui.fgCalls.some((call) => call.color === "error" && call.text === "1 killed"));
+            assert.ok(
+                ui.fgCalls.some((call) => call.color === "dim" && call.text === " · "),
+                "the count segments must be joined with a dim separator",
+            );
+            assert.deepEqual(ui.fgCalls.at(-1), { color: "dim", text: " · /shell to open" });
+        });
+
         it("re-mounts the same key with updated content on every render", () => {
             // Contract: each render replaces the dock content under the same key; pi keeps one widget
             // per key, so later renders do not stack duplicate lines.
@@ -261,52 +289,19 @@ describe("shell dock", () => {
             assert.deepEqual(ui.mountedKeys("belowEditor"), [WIDGET_KEY]);
         });
 
-        it("renders the line dim and switches to accent while selected", () => {
+        it("keeps the command and elapsed seconds of the single running shell uncoloured", () => {
+            // Contract: only the running count is accented; the command and elapsed seconds are plain
+            // and the separators dim, so the summary is not one uniformly coloured block.
             addJob("job-1", "sleep 30");
             setJobTimes("job-1", 100);
+
             render();
 
-            assert.deepEqual(ui.fgCalls.at(-1), { color: "dim", text: "1 running shell · sleep 30 · 0s · /shell to open" });
-
-            dock.setSelected(true);
-
-            assert.equal(dock.isSelected(), true);
-            assert.deepEqual(ui.fgCalls.at(-1), { color: "accent", text: "1 running shell · sleep 30 · 0s · /shell to open" });
-
-            const callsWhileSelected = ui.widgetCalls.length;
-            dock.setSelected(true);
-            assert.equal(ui.widgetCalls.length, callsWhileSelected, "reselecting the same value must not re-render");
-
-            dock.setSelected(false);
-            assert.equal(dock.isSelected(), false);
-            assert.deepEqual(ui.fgCalls.at(-1)?.color, "dim");
-        });
-
-        it("drops the selection when the job list empties", () => {
-            addJob("job-1", "sleep 30");
-            render();
-            dock.setSelected(true);
-            assert.equal(dock.isSelected(), true);
-
-            shellManager.clearAllJobs();
-            render();
-
-            assert.equal(dock.isSelected(), false);
-            assert.equal(ui.mountedWidget("belowEditor", WIDGET_KEY), undefined);
-
-            addJob("job-2", "sleep 30");
-            render();
-
-            assert.equal(ui.fgCalls.at(-1)?.color, "dim", "the next shell must be rendered unselected");
-        });
-
-        it("ignores a selection while there is no job to highlight", () => {
-            render();
-
-            dock.setSelected(true);
-
-            assert.equal(dock.isSelected(), false);
-            assert.equal(ui.mountedWidget("belowEditor", WIDGET_KEY), undefined);
+            assert.deepEqual(ui.fgCalls, [
+                { color: "accent", text: "1 running shell" },
+                { color: "dim", text: " · " },
+                { color: "dim", text: " · /shell to open" },
+            ]);
         });
 
         it("refreshes the elapsed seconds every second and stops once nothing runs", () => {
