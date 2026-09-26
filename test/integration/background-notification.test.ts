@@ -8,6 +8,9 @@
  * before the job is dropped. The lifecycle is part of the contract: the listener is installed per
  * session and replaced on every session_start, removed on session_shutdown - or by the unsubscribe
  * the registration returns - so restarts never stack listeners and one job can never notify twice.
+ * `pi.sendMessage` belongs to pi's lifecycle, not to the extension: the API returns void and pi
+ * attaches its own rejection handling, so the extension calls it synchronously. A synchronous throw
+ * (a stale/invalidated extension API) must not roll the settled job state back.
  */
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
@@ -106,6 +109,11 @@ describe("lune-shell-inspector background notifications", () => {
             assert.ok(text.includes("Exit code: 0"), text);
             assert.ok(text.endsWith(`Output:\n${settled.output.content}`), text);
             assert.ok(!text.includes("undefined"), "absent optional fields must be omitted, not printed");
+
+            // The detached execution reports its outcome in the same turn; after its promise has
+            // fully settled, the job must not have notified a second time.
+            await new Promise((resolve) => setTimeout(resolve, 300));
+            assert.equal(session.host.sendMessageCalls.length, 1, "a natural completion must notify exactly once");
         });
     });
 
@@ -169,6 +177,9 @@ describe("lune-shell-inspector background notifications", () => {
             assert.ok(text.includes("Exit code: 7"), text);
             assert.ok(text.includes("Error: Background shell exited with code 7"), text);
             assert.ok(text.endsWith("Output:\npartial\n"), text);
+
+            await new Promise((resolve) => setTimeout(resolve, 300));
+            assert.equal(session.host.sendMessageCalls.length, 1, "a failed execution must notify exactly once");
         });
     });
 
@@ -239,6 +250,87 @@ describe("lune-shell-inspector background notifications", () => {
         });
     });
 
+    it("keeps the settled job state untouched when pi.sendMessage throws for a stale session", async () => {
+        // Contract: pi owns async delivery and its errors - the runtime attaches its own catch and
+        // reports through emitError - so the extension calls sendMessage synchronously and never
+        // sees a rejected promise. The only failure it can observe is a synchronous throw from a
+        // stale/invalidated extension API; observer isolation must keep that from rolling the
+        // settled job back, and later mutations must still work.
+        const workDir = createTempWorkDir("notify-stale-send");
+        let sends = 0;
+        const session = await openSession(workDir, {
+            sendMessage: () => {
+                sends += 1;
+                throw new Error("stale extension context");
+            },
+        });
+
+        try {
+            const cases = [
+                {
+                    id: "state-completed",
+                    outcome: { type: "completed", exitCode: 0 } as const,
+                    status: "completed",
+                    exitCode: 0,
+                    error: undefined,
+                },
+                {
+                    id: "state-failed",
+                    outcome: { type: "failed", error: "boom", exitCode: 3 } as const,
+                    status: "failed",
+                    exitCode: 3,
+                    error: "boom",
+                },
+                {
+                    id: "state-killed",
+                    outcome: { type: "killed", error: "manual" } as const,
+                    status: "killed",
+                    exitCode: undefined,
+                    error: "manual",
+                },
+            ];
+
+            for (const { id, outcome, status, exitCode, error } of cases) {
+                startJob(id, "echo kept");
+                shellManager.appendOutput(id, "kept\n");
+                const before = Date.now();
+
+                let settled = false;
+                assert.doesNotThrow(() => {
+                    settled = shellManager.settleJob(id, outcome);
+                }, "a throwing sendMessage must not fail the settle");
+                assert.equal(settled, true);
+
+                const job = shellManager.getJob(id)!;
+                assert.equal(job.status, status);
+                assert.ok(job.finishedAt !== undefined && job.finishedAt >= before);
+                assert.equal(job.lastActivityAt, job.finishedAt, "the finish must stay the last activity");
+                assert.equal(job.exitCode, exitCode);
+                assert.equal(job.error, error);
+                assert.equal(job.output.content, "kept\n", "a delivery failure must not roll the output back");
+                assert.equal(job.output.totalLines, 1);
+                assert.equal(job.output.totalBytes, Buffer.byteLength("kept\n"));
+            }
+
+            assert.equal(sends, 3, "every terminal event must have attempted exactly one send");
+            assert.equal(session.host.sendMessageCalls.length, 3);
+            assert.deepEqual(shellManager.getAllJobsStatusStat(), {
+                runningCount: 0,
+                completedCount: 1,
+                failedCount: 1,
+                killedCount: 1,
+            });
+
+            // Later manager work keeps going through the same stale transport.
+            startJob("state-after-stale", "echo again");
+            assert.equal(shellManager.settleJob("state-after-stale", { type: "completed", exitCode: 0 }), true);
+            assert.equal(sends, 4);
+        } finally {
+            await session.host.emit("session_shutdown", session.ctx);
+            removeTempWorkDir(workDir);
+        }
+    });
+
     it("stops notifying after the returned unsubscribe runs", () => {
         const calls: SendMessageCall[] = [];
         const pi = {
@@ -260,22 +352,86 @@ describe("lune-shell-inspector background notifications", () => {
         assert.doesNotThrow(() => unsubscribe(), "unsubscribing twice must be harmless");
     });
 
-    it("does not stack listeners when session_start fires twice on one load", async () => {
+    it("does not stack listeners across repeated session_start events", async () => {
         const workDir = createTempWorkDir("notify-restart-same");
         const host = registerExtension(workDir);
         const ctx = createFakeContext(workDir, { ui: createFakeUi() });
         try {
-            await host.emit("session_start", ctx);
-            await host.emit("session_start", ctx);
+            // A session lifecycle can fire session_start again without a process restart; each one
+            // must replace the previous listener instead of adding another notifier.
+            for (let restart = 0; restart < 4; restart++) {
+                await host.emit("session_start", ctx);
+            }
 
-            startJob("job-restart", "echo hi");
-            shellManager.settleJob("job-restart", { type: "completed", exitCode: 0 });
+            startJob("job-restart-1", "echo one");
+            shellManager.settleJob("job-restart-1", { type: "completed", exitCode: 0 });
+            assert.equal(host.sendMessageCalls.length, 1, "one job must notify once regardless of restarts");
 
-            assert.equal(host.sendMessageCalls.length, 1, "a repeated session_start must replace its listener");
+            for (let restart = 0; restart < 3; restart++) {
+                await host.emit("session_start", ctx);
+            }
+            startJob("job-restart-2", "echo two");
+            shellManager.settleJob("job-restart-2", { type: "completed", exitCode: 0 });
+
+            assert.equal(host.sendMessageCalls.length, 2, "the second job must add exactly one notification");
+            assert.equal(
+                host.sendMessageCalls.filter(
+                    (call) => (call.message.details as { shellJobId?: string } | undefined)?.shellJobId === "job-restart-2",
+                ).length,
+                1,
+                "the second job must not have been notified by a historical listener",
+            );
         } finally {
             await host.emit("session_shutdown", ctx);
             removeTempWorkDir(workDir);
         }
+    });
+
+    it("keeps multiple near-simultaneous completions individually correct", async () => {
+        // Baseline before any notification batching: three jobs settling in one event-loop turn each
+        // keep their own outcome and get their own notification, with content pointing at the right job.
+        await withSession("notify-burst", async (session) => {
+            startJob("burst-a", "echo a");
+            startJob("burst-b", "exit 3");
+            startJob("burst-c", "sleep 1");
+            shellManager.appendOutput("burst-a", "a-out\n");
+            shellManager.appendOutput("burst-b", "b-out\n");
+            shellManager.appendOutput("burst-c", "c-out\n");
+
+            assert.equal(shellManager.settleJob("burst-a", { type: "completed", exitCode: 0 }), true);
+            assert.equal(
+                shellManager.settleJob("burst-b", {
+                    type: "failed",
+                    error: "Background shell exited with code 3",
+                    exitCode: 3,
+                }),
+                true,
+            );
+            assert.equal(shellManager.settleJob("burst-c", { type: "killed", error: "user" }), true);
+
+            assert.deepEqual(shellManager.getAllJobsStatusStat(), {
+                runningCount: 0,
+                completedCount: 1,
+                failedCount: 1,
+                killedCount: 1,
+            });
+            assert.equal(session.host.sendMessageCalls.length, 3, "every settled job must notify exactly once");
+
+            const byId = new Map(
+                session.host.sendMessageCalls.map((call) => [
+                    (call.message.details as { shellJobId: string }).shellJobId,
+                    call,
+                ]),
+            );
+            assert.deepEqual([...byId.keys()].sort(), ["burst-a", "burst-b", "burst-c"], "no job may be lost or duplicated");
+
+            assert.equal((byId.get("burst-a")?.message.details as { status?: string }).status, "completed");
+            assert.equal((byId.get("burst-b")?.message.details as { status?: string }).status, "failed");
+            assert.equal((byId.get("burst-c")?.message.details as { status?: string }).status, "killed");
+            assert.ok(messageText(byId.get("burst-a")!).endsWith("Output:\na-out\n"), messageText(byId.get("burst-a")!));
+            assert.ok(messageText(byId.get("burst-b")!).endsWith("Output:\nb-out\n"), messageText(byId.get("burst-b")!));
+            assert.ok(messageText(byId.get("burst-c")!).endsWith("Output:\nc-out\n"), messageText(byId.get("burst-c")!));
+        });
     });
 
     it("hands notifications over from an ended session to the next one", async () => {

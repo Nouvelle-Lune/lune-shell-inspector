@@ -57,7 +57,14 @@ export default function (pi: ExtensionAPI): void {
     });
 
     pi.on("session_before_tree", (_event, ctx) => {
-        shellManager.clearAllJobs(pi);
+        unsubscribeBackgroundShellNotifications?.();
+        unsubscribeBackgroundShellNotifications = undefined;
+        try {
+            shellManager.clearAllJobs(pi);
+        } finally {
+            unsubscribeBackgroundShellNotifications = registerBackgroundShellNotifications(pi);
+        }
+
     });
 
     pi.on("session_tree", (_event, ctx) => {

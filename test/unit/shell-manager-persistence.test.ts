@@ -15,7 +15,7 @@
  * after running jobs are killed, before the manager is emptied), not which leaf pi picked.
  */
 import assert from "node:assert/strict";
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import { DEFAULT_MAX_LINES, type ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -403,6 +403,53 @@ describe("ShellManager persistence", () => {
             assert.ok(manager.getJobOutput("spilled").startsWith(`[Output truncated. Full output: ${path}]\n`));
         });
 
+        it("restores a truncated job's full-output metadata without spilling again", () => {
+            // Contract: the truncation provenance (flag, totals and the file the complete stream
+            // went to) survives the round trip. Restore must not re-truncate, re-spill or try to
+            // rebuild the dropped bytes from the bounded tail.
+            const log = newSessionLog();
+            const writer = new ShellManager();
+            startRunningJob(writer, { id: "spilled" });
+            const full = Array.from({ length: DEFAULT_MAX_LINES + 500 }, (_, index) => `L${index}`).join("\n");
+            writer.appendOutput("spilled", full);
+            const written = writer.getJob("spilled")!;
+            const expected = {
+                truncated: written.output.truncated,
+                totalLines: written.output.totalLines,
+                totalBytes: written.output.totalBytes,
+                fullOutputPath: written.output.fullOutputPath,
+                content: written.output.content,
+            };
+            assert.equal(expected.truncated, true, "guard: the stream must have spilled");
+            const snapshot = appendShellStatus(writer, log);
+
+            assert.deepEqual(snapshot.jobs[0]!.output, expected, "the snapshot must carry the truncation metadata");
+
+            const manager = new ShellManager();
+            manager.restoreShellManager(contextFor(log));
+            const restored = manager.getJob("spilled")!;
+
+            try {
+                assert.equal(restored.output.truncated, true);
+                assert.equal(restored.output.totalLines, expected.totalLines);
+                assert.equal(restored.output.totalBytes, expected.totalBytes);
+                assert.equal(restored.output.fullOutputPath, expected.fullOutputPath);
+                assert.equal(restored.output.content, expected.content);
+                assert.equal(
+                    readFileSync(expected.fullOutputPath!, "utf8"),
+                    full,
+                    "the original spill file must stay the record",
+                );
+                assert.throws(
+                    () => manager.appendOutput("spilled", "late\n"),
+                    /is not running/,
+                    "a restored settled job cannot spill a new file",
+                );
+            } finally {
+                rmSync(expected.fullOutputPath!, { force: true });
+            }
+        });
+
         it("gives every restored job a fresh terminal and replays its output", async () => {
             // Contract: the terminal is a renderer, not durable state; restore must build a new one per
             // job so `/shell` and `background_shell` can show the persisted output immediately.
@@ -419,6 +466,69 @@ describe("ShellManager persistence", () => {
             const restored = manager.getJob("job-a")!;
             assert.notEqual(restored.terminal, originalTerminal, "the emulator belongs to the old session");
             assert.deepEqual(await screenLines(manager, "job-a"), ["hello", "world"]);
+        });
+
+        it("rebuilds a restored job's screen deterministically from the retained output", async () => {
+            // Contract: the restored emulator executes the persisted text, so the screen after restore
+            // is exactly the screen of replaying that text into a fresh terminal - plain lines, CR
+            // redraws, SGR colour and erase-line all included.
+            const log = newSessionLog();
+            const writer = new ShellManager();
+            startRunningJob(writer, { id: "vt-job" });
+            const stream =
+                "plain line\n" +
+                "\x1b[32mprogress 10%\x1b[0m\rprogress 100%\n" +
+                "erase me\x1b[2K\rdone\n" +
+                "\x1b[1;34mblue\x1b[0m end\n";
+            writer.appendOutput("vt-job", stream);
+            assert.deepEqual(await screenLines(writer, "vt-job"), [
+                "plain line",
+                "progress 100%",
+                "done",
+                "blue end",
+            ]);
+            const retained = writer.getJob("vt-job")!.output.content;
+            appendShellStatus(writer, log);
+
+            const manager = new ShellManager();
+            manager.restoreShellManager(contextFor(log));
+            const restored = await screenLines(manager, "vt-job");
+
+            const replay = new ShellManager();
+            startRunningJob(replay, { id: "replay" });
+            replay.appendOutput("replay", retained);
+            const replayed = await screenLines(replay, "replay");
+
+            assert.deepEqual(restored, replayed, "restore must equal a fresh replay of the retained text");
+            assert.deepEqual(restored, ["plain line", "progress 100%", "done", "blue end"]);
+        });
+
+        it("rebuilds only the retained tail, never screen history the bounded tail already dropped", async () => {
+            // Contract limit: persistence stores the bounded tail, not the emulator's scrollback. A
+            // restored job can therefore show only what the retained output still holds; screen lines
+            // that left the tail before the snapshot must stay gone.
+            const log = newSessionLog();
+            const writer = new ShellManager();
+            startRunningJob(writer, { id: "history-job" });
+            const total = 6000;
+            writer.appendOutput("history-job", Array.from({ length: total }, (_, index) => `L${index}`).join("\n"));
+            const retained = writer.getJob("history-job")!.output.content;
+            assert.ok(retained.includes("L4000"), "guard: the retained tail must have dropped the head");
+            const originalScreen = await screenLines(writer, "history-job");
+
+            appendShellStatus(writer, log);
+            const manager = new ShellManager();
+            manager.restoreShellManager(contextFor(log));
+            const restoredScreen = await screenLines(manager, "history-job");
+
+            const replay = new ShellManager();
+            startRunningJob(replay, { id: "replay" });
+            replay.appendOutput("replay", retained);
+            const replayedScreen = await screenLines(replay, "replay");
+
+            assert.deepEqual(restoredScreen, replayedScreen, "the restored screen must be the replay of the retained text");
+            assert.notDeepEqual(restoredScreen, originalScreen, "the dropped screen history must not be reconstructed");
+            assert.ok(!restoredScreen.includes("L0"), "the dropped head must not reappear");
         });
 
         it("gives every restored job a new, un-aborted controller", () => {

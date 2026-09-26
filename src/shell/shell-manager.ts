@@ -387,7 +387,11 @@ export class ShellManager {
 
     private emit(event: ShellManagerEvent): void {
         for (const listener of this.listeners) {
-            listener(event);
+            try {
+                listener(event);
+            } catch (error) {
+                // Ignore errors thrown by listeners to prevent one failing listener from affecting others.
+            }
         }
     }
 

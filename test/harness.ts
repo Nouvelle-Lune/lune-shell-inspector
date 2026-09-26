@@ -564,6 +564,19 @@ export interface RegisteredCommand {
     handler: (args: string, ctx: ExtensionContext) => Promise<void> | void;
 }
 
+/** Options for {@link registerExtension}. */
+export interface RegisterExtensionOptions {
+    /**
+     * Replaces the host's `pi.sendMessage`, e.g. to model a stale/invalidated extension API.
+     *
+     * The real `ExtensionAPI.sendMessage` returns `void` and pi attaches its own rejection handling
+     * to the async work behind it, so a failing delivery reaches the extension only as a synchronous
+     * throw. The host still records the attempted call in `sendMessageCalls` before delegating, so a
+     * test can assert that the extension tried to notify even when the API throws.
+     */
+    sendMessage?: (message: SendMessageCall["message"], options?: SendMessageCall["options"]) => void;
+}
+
 /**
  * Register the extension against a minimal fake pi host and return the host.
  *
@@ -573,9 +586,11 @@ export interface RegisteredCommand {
  *
  * `appendEntry` routes to the real `SessionManager.appendCustomEntry` of the host's session, the
  * same call pi makes, so a persisted snapshot lands on the branch's actual leaf and shows up in
- * `log.getBranch()` exactly as in a live session.
+ * `log.getBranch()` exactly as in a live session. `sendMessage` records every attempted call and
+ * then delegates to the optional override, so a test can model a failing transport without
+ * replacing the host.
  */
-export function registerExtension(cwd: string, sessionLog?: FakeSessionLog): FakePiHost {
+export function registerExtension(cwd: string, sessionLog?: FakeSessionLog, options: RegisterExtensionOptions = {}): FakePiHost {
     const previousCwd = process.cwd();
     const registeredTools: BashToolDefinition[] = [];
     const registeredCommands: RegisteredCommand[] = [];
@@ -603,8 +618,9 @@ export function registerExtension(cwd: string, sessionLog?: FakeSessionLog): Fak
             // pi's own routing: the session manager owns the leaf and the entry id.
             sessionManager?.appendCustomEntry(customType, data);
         },
-        sendMessage: (message: SendMessageCall["message"], options?: SendMessageCall["options"]) => {
-            sendMessageCalls.push({ message, options });
+        sendMessage: (message: SendMessageCall["message"], messageOptions?: SendMessageCall["options"]) => {
+            sendMessageCalls.push({ message, options: messageOptions });
+            options.sendMessage?.(message, messageOptions);
         },
         on: (event: PiEventName, handler: PiEventHandler) => {
             const handlers = handlersByEvent.get(event) ?? [];
@@ -688,6 +704,12 @@ export interface ExtensionSession {
     sessionLog: FakeSessionLog;
 }
 
+/** Options for {@link openSession}: the session context plus the pi host's transport override. */
+export interface OpenSessionOptions extends FakeContextOptions {
+    /** Forwarded to {@link registerExtension}. */
+    sendMessage?: RegisterExtensionOptions["sendMessage"];
+}
+
 /**
  * Load the extension for `cwd` and start a session against a fake context.
  *
@@ -698,16 +720,17 @@ export interface ExtensionSession {
  */
 export async function openSession(
     cwd: string,
-    options: FakeContextOptions = {},
+    options: OpenSessionOptions = {},
 ): Promise<ExtensionSession> {
-    const sessionLog = options.sessionLog ?? new FakeSessionLog({ cwd });
-    const host = registerExtension(cwd, sessionLog);
+    const { sendMessage, ...contextOptions } = options;
+    const sessionLog = contextOptions.sessionLog ?? new FakeSessionLog({ cwd });
+    const host = registerExtension(cwd, sessionLog, { sendMessage });
     const tool = host.registeredTools.find((entry) => entry.name === "bash");
     if (!tool) {
         throw new Error('lune-shell-inspector did not register a "bash" tool');
     }
-    const ui = options.ui ?? createFakeUi();
-    const ctx = createFakeContext(cwd, { ...options, ui, sessionLog });
+    const ui = contextOptions.ui ?? createFakeUi();
+    const ctx = createFakeContext(cwd, { ...contextOptions, ui, sessionLog });
     await host.emit("session_start", ctx);
     return { host, tool, ctx, ui, sessionLog };
 }

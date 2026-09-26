@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth, stripTerminalSequences } from "@earendil-works/pi-tui"
 import { shellManager } from "./shell-manager.ts";
 
 
@@ -131,10 +132,14 @@ function shellDockSummary(ctx: ExtensionContext): string {
 }
 
 function truncateOutput(output: string, maxLength: number): string {
-    if (output.length <= maxLength) {
+    output = stripTerminalSequences(output)
+        .replace(/[\r\n\t]/g, " ")
+        .replace(/ +/g, " ")
+        .trim();
+    if (visibleWidth(output) <= maxLength) {
         return output;
     }
-    return output.slice(0, maxLength) + "...";
+    return truncateToWidth(output, maxLength, "…");
 }
 
 export const shellDock = new ShellDock();

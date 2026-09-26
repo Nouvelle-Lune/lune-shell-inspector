@@ -16,6 +16,7 @@
  * defect being guarded here.
  */
 import assert from "node:assert/strict";
+import { rmSync, statSync } from "node:fs";
 import { afterEach, describe, it } from "node:test";
 
 import { shellManager } from "../../src/shell/shell-manager.ts";
@@ -211,6 +212,117 @@ describe("lune-shell-inspector teardown races", () => {
             assert.equal(snapshot?.customType, "lune-shell-view-status");
             const jobs = (snapshot?.data as { jobs: Array<{ id: string; status: string }> }).jobs;
             assert.deepEqual(jobs.map((job) => [job.id, job.status]), [["race-abort-path", "killed"]]);
+        });
+    });
+
+    it("keeps a teardown kill silent and the abort rejection from notifying later", async () => {
+        await withTempDir("race-teardown-notify", async (workDir) => {
+            const session = await openSession(workDir);
+            const { jobId } = await startBackgroundBashCommand(session.tool, {
+                command: "sleep 30",
+                ctx: session.ctx,
+                toolCallId: "race-teardown-notify",
+            });
+            const terminalEvents: string[] = [];
+            const unsubscribe = shellManager.subscribe((event) => {
+                if (
+                    (event.type === "job-completed" || event.type === "job-failed" || event.type === "job-killed") &&
+                    event.id === jobId
+                ) {
+                    terminalEvents.push(event.type);
+                }
+            });
+
+            try {
+                await session.host.emit("session_shutdown", session.ctx);
+
+                assert.deepEqual(terminalEvents, ["job-killed"], "teardown must publish exactly one kill event");
+                assert.deepEqual(session.host.sendMessageCalls, [], "teardown must not notify the agent");
+
+                // The runner's abort rejection arrives after the job was killed and dropped.
+                await new Promise((resolve) => setTimeout(resolve, 500));
+
+                assert.deepEqual(terminalEvents, ["job-killed"], "a late rejection must not emit again");
+                assert.deepEqual(session.host.sendMessageCalls, [], "a late rejection must not notify either");
+                assert.equal(shellManager.getJob(jobId), undefined, "a late rejection must not resurrect the job");
+                assert.deepEqual(shellManager.getAllJobsStatusStat(), {
+                    runningCount: 0,
+                    completedCount: 0,
+                    failedCount: 0,
+                    killedCount: 0,
+                });
+            } finally {
+                unsubscribe();
+            }
+        });
+    });
+
+    it("refuses late onData after teardown without appending to the spill file", async () => {
+        await withTempDir("race-late-spill", async (workDir) => {
+            const failures = new ProcessFailureCollector();
+            failures.start();
+            const session = await openSession(workDir);
+            let spillPath: string | undefined;
+
+            try {
+                const { jobId } = await startBackgroundBashCommand(session.tool, {
+                    command: "while true; do echo flooding; done",
+                    ctx: session.ctx,
+                    toolCallId: "race-late-spill",
+                });
+
+                await waitFor(
+                    "the flood to spill its output",
+                    () => shellManager.getJob(jobId)?.output.fullOutputPath !== undefined,
+                    15_000,
+                );
+                const path = shellManager.getJob(jobId)!.output.fullOutputPath!;
+                spillPath = path;
+
+                let teardownStarted = false;
+                const lateOutputEvents: string[] = [];
+                const unsubscribe = shellManager.subscribe((event) => {
+                    if (event.type === "output-updated" && event.id === jobId && teardownStarted) {
+                        lateOutputEvents.push(event.type);
+                    }
+                });
+
+                try {
+                    teardownStarted = true;
+                    await session.host.emit("session_shutdown", session.ctx);
+                    const sizeAtTeardown = statSync(path).size;
+
+                    assert.equal(shellManager.getJob(jobId), undefined, "teardown must drop the job");
+                    assert.deepEqual(shellManager.getAllJobsStatusStat(), {
+                        runningCount: 0,
+                        completedCount: 0,
+                        failedCount: 0,
+                        killedCount: 0,
+                    });
+
+                    // Buffered chunks keep arriving from the killed process; the runner's onData guard
+                    // has to refuse them without throwing, appending, or creating new state.
+                    await failures.settle();
+
+                    failures.assertEmpty("a late chunk must not escape as a process error");
+                    assert.deepEqual(lateOutputEvents, [], "no output-updated event may follow teardown");
+                    assert.equal(shellManager.getJob(jobId), undefined, "no late chunk may resurrect the job");
+                    assert.equal(statSync(path).size, sizeAtTeardown, "a late chunk must not grow the spill file");
+                    assert.deepEqual(shellManager.getAllJobsStatusStat(), {
+                        runningCount: 0,
+                        completedCount: 0,
+                        failedCount: 0,
+                        killedCount: 0,
+                    });
+                } finally {
+                    unsubscribe();
+                }
+            } finally {
+                if (spillPath) {
+                    rmSync(spillPath, { force: true });
+                }
+                failures.stop();
+            }
         });
     });
 });

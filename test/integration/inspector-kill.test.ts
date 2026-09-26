@@ -28,6 +28,7 @@ import {
     removeTempWorkDir,
     startBackgroundBashCommand,
     waitFor,
+    waitForJobSettled,
     type ExtensionSession,
     type SendMessageCall,
 } from "../harness.ts";
@@ -146,6 +147,7 @@ describe("lune-shell-inspector kill key", () => {
 
         assert.equal(notification.message.customType, "background-shell-notification");
         assert.equal(notification.message.display, false, "the notification must not enter the transcript");
+        assert.equal(notification.options?.triggerTurn, true, "the agent must get a turn to read it");
         assert.equal(notification.options?.deliverAs, "steer");
         assert.deepEqual(notification.message.details, {
             shellJobId: jobId,
@@ -155,6 +157,8 @@ describe("lune-shell-inspector kill key", () => {
 
         const text = messageText(notification);
         assert.ok(text.startsWith(`Background shell ${jobId} killed.`), text);
+        assert.ok(text.includes("Command: "), text);
+        assert.ok(text.includes(pidFile), `the killed shell's command must reach the agent: ${text}`);
         assert.ok(text.includes("Error: Shell killed by user"), text);
         assert.ok(text.includes("Output:\nready"), `the output collected before the kill must reach the agent: ${text}`);
     });
@@ -183,4 +187,134 @@ describe("lune-shell-inspector kill key", () => {
             { runningCount: 1, completedCount: 0, failedCount: 0, killedCount: 1 },
         );
     });
+
+    it("keeps the user kill as the only notification when the aborted execution rejects", async () => {
+        const { jobId } = await startBackgroundBashCommand(session.tool, {
+            command: "sleep 30",
+            ctx: session.ctx,
+            toolCallId: "call-kill-race",
+        });
+        const terminalEvents: string[] = [];
+        const unsubscribe = shellManager.subscribe((event) => {
+            if (
+                (event.type === "job-completed" || event.type === "job-failed" || event.type === "job-killed") &&
+                event.id === jobId
+            ) {
+                terminalEvents.push(event.type);
+            }
+        });
+
+        try {
+            press("x");
+            assert.equal(shellManager.getJob(jobId)?.status, "killed");
+            assert.equal(session.host.sendMessageCalls.length, 1);
+
+            // The backend rejects with an AbortError after the process tree was killed; the runner's
+            // settle must be refused rather than notify a second time.
+            await new Promise((resolve) => setTimeout(resolve, 500));
+
+            assert.deepEqual(terminalEvents, ["job-killed"], "the kill must remain the job's only terminal event");
+            const job = shellManager.getJob(jobId)!;
+            assert.equal(job.status, "killed");
+            assert.equal(job.error, "Shell killed by user", "the abort rejection must not rewrite the reason");
+            assert.deepEqual(
+                shellManager.getAllJobsStatusStat(),
+                { runningCount: 0, completedCount: 0, failedCount: 0, killedCount: 1 },
+                "the race must move the killed counter once",
+            );
+            assert.equal(session.host.sendMessageCalls.length, 1, "the abort rejection must not notify again");
+        } finally {
+            unsubscribe();
+        }
+    });
+
+    it("keeps a repeated kill idempotent: one state change, one event, one notification", async () => {
+        const { jobId } = await startBackgroundBashCommand(session.tool, {
+            command: "sleep 30",
+            ctx: session.ctx,
+            toolCallId: "call-double-kill",
+        });
+        const terminalEvents: string[] = [];
+        const unsubscribe = shellManager.subscribe((event) => {
+            if (event.type === "job-killed" && event.id === jobId) {
+                terminalEvents.push(event.type);
+            }
+        });
+
+        try {
+            press("x");
+            assert.doesNotThrow(() => press("x"), "the second x must not throw");
+
+            const job = shellManager.getJob(jobId)!;
+            assert.equal(job.status, "killed");
+            assert.equal(job.error, "Shell killed by user", "the second x must not rewrite the reason");
+            assert.equal(job.controller.signal.aborted, true, "the kill must have aborted the job once");
+            assert.deepEqual(
+                shellManager.getAllJobsStatusStat(),
+                { runningCount: 0, completedCount: 0, failedCount: 0, killedCount: 1 },
+                "the second x must not move a counter",
+            );
+            assert.deepEqual(terminalEvents, ["job-killed"], "the job must emit exactly one kill event");
+            assert.equal(session.host.sendMessageCalls.length, 1, "a repeated kill must not notify twice");
+        } finally {
+            unsubscribe();
+        }
+    });
+
+    for (const status of ["completed", "failed", "killed"] as const) {
+        it(`ignores x on an already-${status} shell`, async () => {
+            const jobId = `call-settled-${status}`;
+            const command =
+                status === "completed"
+                    ? "printf 'done\\n'"
+                    : status === "failed"
+                        ? "printf 'bad\\n'; exit 3"
+                        : "sleep 300";
+            await startBackgroundBashCommand(session.tool, {
+                command,
+                ctx: session.ctx,
+                toolCallId: jobId,
+            });
+            if (status === "killed") {
+                assert.equal(shellManager.settleJob(jobId, { type: "killed", error: "manual kill" }), true);
+            } else {
+                assert.equal((await waitForJobSettled(jobId)).status, status);
+            }
+
+            const before = shellManager.getJob(jobId)!;
+            const originalError = before.error;
+            const originalExitCode = before.exitCode;
+            const originalFinishedAt = before.finishedAt;
+            const statsBefore = shellManager.getAllJobsStatusStat();
+            const notificationsBefore = session.host.sendMessageCalls.length;
+            const terminalEvents: string[] = [];
+            const unsubscribe = shellManager.subscribe((event) => {
+                if (
+                    (event.type === "job-completed" || event.type === "job-failed" || event.type === "job-killed") &&
+                    event.id === jobId
+                ) {
+                    terminalEvents.push(event.type);
+                }
+            });
+
+            try {
+                press("x");
+            } finally {
+                unsubscribe();
+            }
+
+            const after = shellManager.getJob(jobId)!;
+            assert.equal(after.status, status, "x must not change a settled shell's status");
+            assert.equal(after.error, originalError, "x must not overwrite the recorded error");
+            assert.equal(after.exitCode, originalExitCode);
+            assert.equal(after.finishedAt, originalFinishedAt);
+            assert.deepEqual(shellManager.getAllJobsStatusStat(), statsBefore, "x must not move a counter");
+            assert.deepEqual(terminalEvents, [], "x must not emit a terminal event for a settled shell");
+            assert.equal(
+                session.host.sendMessageCalls.length,
+                notificationsBefore,
+                "x must not notify for a settled shell",
+            );
+        });
+    }
 });

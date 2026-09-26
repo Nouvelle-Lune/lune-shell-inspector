@@ -9,7 +9,7 @@
  * (`getScreenLines` returns the output after a headless terminal executed it), the outcome each settle accepts, the
  * idempotence of settling (a job that is unknown or already settled is refused without an event or
  * a counter change), the per-status counters, and the notification semantics (synchronous, once
- * per mutation, unsubscribe-able) including the behaviour of a subscriber that throws.
+ * per mutation, unsubscribe-able) including the isolation of a subscriber that throws.
  */
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
@@ -43,6 +43,19 @@ function startRunningJob(
 const completed = (exitCode?: number): ShellJobOutcome => ({ type: "completed", exitCode });
 const failed = (error: string, exitCode?: number): ShellJobOutcome => ({ type: "failed", error, exitCode });
 const killed = (error?: string): ShellJobOutcome => ({ type: "killed", error });
+
+/**
+ * The job's screen once the emulator has executed everything written to it so far.
+ *
+ * Jobs stream raw VT instructions into a headless terminal, which parses queued writes on a later
+ * tick; reading without flushing would see the previous screen.
+ */
+async function screenLines(manager: ShellManager, id: string): Promise<string[]> {
+    const terminal = manager.getJob(id)!.terminal;
+    await new Promise<void>((resolve) => terminal.write("", () => resolve()));
+
+    return manager.getScreenLines(id);
+}
 
 describe("ShellManager", () => {
     describe("exported singleton", () => {
@@ -285,6 +298,59 @@ describe("ShellManager", () => {
             assert.equal(manager.settleJob("job-a", completed(0)), false);
             assert.equal(manager.getJob("job-a")?.status, "killed");
         });
+
+        it("settles the job and keeps later listeners running when an earlier listener throws", () => {
+            // Desired contract: observers cannot veto a mutation. A throwing listener must not make
+            // the settle fail, hide the event from later listeners, or move a counter twice.
+            const cases = [
+                {
+                    outcome: completed(0),
+                    status: "completed",
+                    event: "job-completed",
+                    stats: { runningCount: 0, completedCount: 1, failedCount: 0, killedCount: 0 },
+                },
+                {
+                    outcome: failed("boom", 3),
+                    status: "failed",
+                    event: "job-failed",
+                    stats: { runningCount: 0, completedCount: 0, failedCount: 1, killedCount: 0 },
+                },
+                {
+                    outcome: killed("manual"),
+                    status: "killed",
+                    event: "job-killed",
+                    stats: { runningCount: 0, completedCount: 0, failedCount: 0, killedCount: 1 },
+                },
+            ] as const;
+
+            for (const { outcome, status, event, stats } of cases) {
+                const manager = new ShellManager();
+                const id = `${status}-job`;
+                startRunningJob(manager, { id });
+                const seen: string[] = [];
+                manager.subscribe(() => {
+                    throw new Error("observer boom");
+                });
+                manager.subscribe((received) => {
+                    seen.push(received.type);
+                });
+
+                let settled = false;
+                assert.doesNotThrow(() => {
+                    settled = manager.settleJob(id, outcome);
+                }, `a throwing listener must not fail the ${status} settle`);
+                assert.equal(settled, true);
+
+                const job = manager.getJob(id)!;
+                assert.equal(job.status, status);
+                assert.ok(job.finishedAt !== undefined);
+                assert.equal(job.lastActivityAt, job.finishedAt);
+                assert.deepEqual(seen, [event], `the later listener must still see ${event}`);
+                assert.deepEqual(manager.getAllJobsStatusStat(), stats);
+                assert.equal(manager.settleJob(id, completed(0)), false, "a second settle must stay refused");
+                assert.deepEqual(manager.getAllJobsStatusStat(), stats, "the refused settle must not move a counter");
+            }
+        });
     });
 
     describe("clearAllJobs", () => {
@@ -386,6 +452,31 @@ describe("ShellManager", () => {
             manager.appendOutput("job-a", "two");
 
             assert.deepEqual(seen, ["notified", "notified"]);
+        });
+
+        it("appends the chunk and keeps later listeners running when a listener throws", async () => {
+            // Desired contract: the output write is committed before observers run, so an observer
+            // failure must not make appendOutput throw or block the later listeners.
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            const seen: string[] = [];
+            manager.subscribe(() => {
+                throw new Error("observer boom");
+            });
+            manager.subscribe((event) => {
+                seen.push(event.type);
+            });
+
+            assert.doesNotThrow(() => manager.appendOutput("job-a", "one\ntwo\n"));
+            const job = manager.getJob("job-a")!;
+            assert.equal(job.output.content, "one\ntwo\n");
+            assert.equal(job.output.totalLines, 2);
+            assert.equal(job.output.totalBytes, Buffer.byteLength("one\ntwo\n"));
+            assert.deepEqual(seen, ["output-updated"], "the later listener must still see the event");
+            assert.deepEqual(await screenLines(manager, "job-a"), ["one", "two"], "the emulator must receive the chunk");
+
+            assert.doesNotThrow(() => manager.appendOutput("job-a", "three"));
+            assert.equal(job.output.content, "one\ntwo\nthree", "later output must still be appendable");
         });
 
         it("rejects an unknown id and every settled job", () => {
@@ -655,22 +746,73 @@ describe("ShellManager", () => {
 
             assert.equal(existsSync(path), true, "clearing the jobs must not delete the spill file");
         });
+
+        it("leaves the complete spill file untouched when the job settles", () => {
+            // Contract: the spill file is the record of the whole stream. Settling only stamps the
+            // outcome; it must not rewrite, truncate or replace the file, and a refused late chunk
+            // must not reach it either.
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            const full = longStream(DEFAULT_MAX_LINES + 500);
+            manager.appendOutput("job-a", full);
+            const path = spillPath(manager, "job-a");
+            const sizeBeforeSettle = statSync(path).size;
+
+            assert.equal(manager.settleJob("job-a", completed(0)), true);
+
+            const job = manager.getJob("job-a")!;
+            assert.equal(existsSync(path), true, "settling must not remove the spill file");
+            assert.equal(statSync(path).size, sizeBeforeSettle, "settling must not rewrite the file");
+            assert.equal(readFileSync(path, "utf8"), full, "the file must still hold every byte");
+            assert.equal(job.output.fullOutputPath, path);
+            assert.equal(job.output.truncated, true);
+            assert.equal(
+                manager.getJobOutput("job-a"),
+                `[Output truncated. Full output: ${path}]\n${truncateTail(full).content}`,
+            );
+
+            assert.throws(() => manager.appendOutput("job-a", "late\n"), /is not running/);
+            assert.equal(statSync(path).size, sizeBeforeSettle, "a refused late chunk must not reach the file");
+        });
+
+        it("keeps interleaved post-spill writes in each job's own file", () => {
+            // Contract: after both jobs spilled, alternating chunks must still land in the right
+            // file, in order, with no cross-contamination between the two streams.
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            startRunningJob(manager, { id: "job-b" });
+            const headA = longStream(DEFAULT_MAX_LINES + 100);
+            const headB = longStream(DEFAULT_MAX_LINES + 50);
+
+            manager.appendOutput("job-a", headA);
+            manager.appendOutput("job-b", headB);
+            const pathA = spillPath(manager, "job-a");
+            const pathB = spillPath(manager, "job-b");
+            assert.notEqual(pathA, pathB, "each job must own its file");
+
+            const aChunks = ["a-1\n", "a-2\n", "a-3\n"];
+            const bChunks = ["b-1\n", "b-2\n", "b-3\n"];
+            for (let index = 0; index < aChunks.length; index++) {
+                manager.appendOutput("job-a", aChunks[index]!);
+                manager.appendOutput("job-b", bChunks[index]!);
+            }
+
+            const fullA = headA + aChunks.join("");
+            const fullB = headB + bChunks.join("");
+            assert.equal(readFileSync(pathA, "utf8"), fullA);
+            assert.equal(readFileSync(pathB, "utf8"), fullB);
+            assert.ok(!readFileSync(pathA, "utf8").includes("b-1"), "A's file must not receive B's chunks");
+            assert.ok(!readFileSync(pathB, "utf8").includes("a-1"), "B's file must not receive A's chunks");
+            assert.ok(manager.getJobOutput("job-a").includes("a-3"), "A's newest chunk must stay readable");
+            assert.ok(manager.getJobOutput("job-b").includes("b-3"), "B's newest chunk must stay readable");
+            assert.equal(manager.getJob("job-a")!.output.totalBytes, Buffer.byteLength(fullA));
+            assert.equal(manager.getJob("job-b")!.output.totalBytes, Buffer.byteLength(fullB));
+            assert.equal(manager.getJob("job-a")!.output.totalLines, (fullA.match(/\n/g) ?? []).length);
+            assert.equal(manager.getJob("job-b")!.output.totalLines, (fullB.match(/\n/g) ?? []).length);
+        });
     });
 
     describe("getScreenLines", () => {
-        /**
-         * The job's screen once the emulator has executed everything written to it so far.
-         *
-         * Jobs stream raw VT instructions into a headless terminal, which parses queued writes on a
-         * later tick; reading without flushing would see the previous screen.
-         */
-        async function screenLines(manager: ShellManager, id: string): Promise<string[]> {
-            const terminal = manager.getJob(id)!.terminal;
-            await new Promise<void>((resolve) => terminal.write("", () => resolve()));
-
-            return manager.getScreenLines(id);
-        }
-
         it("returns the executed screen instead of the raw text", async () => {
             // Contract: readers get the result of the VT instructions - the redraws collapsed, the
             // erased text gone - and never the control bytes themselves.
@@ -1022,23 +1164,44 @@ describe("ShellManager", () => {
             assert.deepEqual(order, ["first", "second"]);
         });
 
-        it("lets a throwing listener abort the remaining notifications and the caller", () => {
-            // Contract: emit() has no try/catch, so one failing listener both prevents the later
-            // listeners from running and surfaces through the mutation call - while the mutation
-            // itself has already been applied.
+        it("isolates a throwing listener so later listeners still receive every event", () => {
+            // Desired contract (regression): one failing observer must not abort emit(). The shell
+            // mutation completes, and the remaining listeners see started, output and settled events
+            // in registration order.
             const manager = new ShellManager();
             const seen: string[] = [];
             manager.subscribe(() => {
-                seen.push("throwing");
                 throw new Error("listener boom");
             });
-            manager.subscribe(() => {
-                seen.push("later");
+            manager.subscribe((event) => {
+                seen.push(`B:${event.type}`);
+            });
+            manager.subscribe((event) => {
+                seen.push(`C:${event.type}`);
             });
 
-            assert.throws(() => startRunningJob(manager, { id: "job-a" }), /listener boom/);
-            assert.deepEqual(seen, ["throwing"], "the later listener must not run");
-            assert.equal(manager.getJob("job-a")?.status, "running", "the job was stored before listeners ran");
+            assert.doesNotThrow(() => startRunningJob(manager, { id: "job-a" }));
+            assert.doesNotThrow(() => manager.appendOutput("job-a", "chunk\n"));
+            assert.doesNotThrow(() => manager.settleJob("job-a", completed(0)));
+
+            assert.deepEqual(seen, [
+                "B:job-started",
+                "C:job-started",
+                "B:output-updated",
+                "C:output-updated",
+                "B:job-completed",
+                "C:job-completed",
+            ], "every listener after the throwing one must receive every event");
+            const job = manager.getJob("job-a")!;
+            assert.equal(job.status, "completed");
+            assert.equal(job.output.content, "chunk\n");
+            assert.equal(job.exitCode, 0);
+            assert.deepEqual(manager.getAllJobsStatusStat(), {
+                runningCount: 0,
+                completedCount: 1,
+                failedCount: 0,
+                killedCount: 0,
+            });
         });
 
         it("visits a listener added during a notification in the same emit", () => {

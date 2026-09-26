@@ -17,6 +17,8 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
+
 import { shellDock } from "../../src/shell/shell-dock.ts";
 import { shellManager } from "../../src/shell/shell-manager.ts";
 import {
@@ -286,7 +288,10 @@ describe("shell dock next to pi-subagents widgets", () => {
                 toolCallId: "call-subagent-starts",
             });
 
-            assert.match(dockText(session.ui) ?? "", /^1 running shell · for n in 1 2 3 4; do\.\.\. · \d+s · \/shell to open$/);
+            assert.match(
+                stripTerminalSequences(dockText(session.ui) ?? ""),
+                /^1 running shell · for n in 1 2 3 4; d… · \d+s · \/shell to open$/,
+            );
 
             const fleetWidget = subagentWidget("subagent fleet · 1 running");
             session.ui.setWidget(SUBAGENT_FLEET_KEY, fleetWidget, { placement: "belowEditor" });
