@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-09-28
+
+### Fixed
+
+- **Command previews are normalized in `/shell` too.** The inspector renders job commands through the same
+  formatter as the dock (`src/shell/shell-command.ts`), so terminal sequences, carriage returns, newlines,
+  tabs and repeated spaces can no longer break the job list or the selected-job header.
+
 ## [1.0.2] - 2026-09-26
 
 ### Added
@@ -47,7 +55,8 @@
   output retention with full-output spill files, terminal-screen rendering of streamed output, and
   persistence/restore of shell state across session lifecycle events.
 
-[Unreleased]: https://github.com/Nouvelle-Lune/lune-shell-inspector/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/Nouvelle-Lune/lune-shell-inspector/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/Nouvelle-Lune/lune-shell-inspector/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/Nouvelle-Lune/lune-shell-inspector/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Nouvelle-Lune/lune-shell-inspector/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Nouvelle-Lune/lune-shell-inspector/releases/tag/v1.0.0
