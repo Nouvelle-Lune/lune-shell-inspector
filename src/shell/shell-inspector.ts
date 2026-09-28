@@ -17,6 +17,7 @@ import {
     type ShellJob,
     type ShellJobStatus,
 } from "./shell-manager.ts";
+import { formatShellCommand } from "./shell-command.ts";
 
 type ThemeColor = Parameters<Theme["fg"]>[0];
 
@@ -368,9 +369,9 @@ export class ShellInspector implements Component {
 
             const name = selected
                 ? this.theme.bold(
-                    truncateToWidth(job.command, nameWidth, "…"),
+                    formatShellCommand(job.command, nameWidth),
                 )
-                : truncateToWidth(job.command, nameWidth, "…");
+                : formatShellCommand(job.command, nameWidth);
 
             const gap = Math.max(
                 1,
@@ -403,7 +404,7 @@ export class ShellInspector implements Component {
         const color = statusColor(job.status);
 
         const command = this.theme.bold(
-            truncateToWidth(job.command, Math.max(4, contentWidth - 2), "…"),
+            formatShellCommand(job.command, Math.max(4, contentWidth - 2)),
         );
 
         const rows: string[] = [

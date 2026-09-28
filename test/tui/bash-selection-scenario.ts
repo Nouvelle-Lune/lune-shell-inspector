@@ -12,12 +12,15 @@
  *    streams;
  * 3. the closing text arrives after the background shell settled, so the inspector can also be
  *    inspected in its settled state.
+ * 4. after those selection steps, a second user turn starts a multi-line background command and
+ *    automatically dispatches the real `/shell` extension command. Verify the command appears as
+ *    one line in both panes, the frame stays intact, and Esc closes the overlay without leaving rows.
  *
  * Nothing is asserted here - the human watching the TUI judges the rows, the dock and the inspector.
  *
  * Selection (all optional, no silent fallback):
- * - `LUNE_SHELL_INSPECTOR_COMMAND` replaces the long background command.
- * - `LUNE_SHELL_INSPECTOR_FIXTURE` picks the long background fixture (default `long-output`, whose 200
+ * - `LUNE_SHELL_INSPECTOR_COMMAND` replaces the original selection walkthrough's background command.
+ * - `LUNE_SHELL_INSPECTOR_FIXTURE` picks that background fixture (default `long-output`, whose 200
  *   lines overflow the inspector's pane); an unknown id throws while this extension loads.
  * - `LUNE_SHELL_INSPECTOR_TIMEOUT` is the background command's timeout in seconds.
  * The quick foreground command is fixed on purpose: it exists to show the delegation path.
@@ -46,6 +49,19 @@ const BACKGROUND_REASON =
 
 /** Closing text, printed once the background shell settled. */
 const FINAL_TEXT = "bash selection fixture finished";
+
+/** Multi-line command used after the selection demo to verify inspector command rendering. */
+const MULTILINE_REPRO_COMMAND = [
+    "set -euo pipefail",
+    "printf 'multiline inspector reproduction started\\n'",
+    "sleep 300",
+].join("\n");
+
+/** Prompt that starts the final, multi-line inspector reproduction after the selection demo settles. */
+const MULTILINE_REPRO_PROMPT = "Run the multi-line shell inspector rendering reproduction.";
+
+/** Closing text for the final scripted call; the running shell remains visible in `/shell`. */
+const MULTILINE_REPRO_FINAL_TEXT = "multiline inspector reproduction is running";
 
 /** Lets the foreground row settle on screen before the background turn starts. */
 const PAUSE_BEFORE_BACKGROUND_MS = 700;
@@ -120,5 +136,39 @@ export default function (pi: ExtensionAPI): void {
         backgroundTurn,
         // Waits for the job to settle, so the inspector can also be opened on the settled shell.
         finalTurn,
+        // The existing background shell emits a completion notification that requests a model
+        // response; keep that real notification turn ahead of the explicit rendering repro prompt.
+        fauxAssistantMessage("The original selection shell completed."),
+        // Appended after the original selection walkthrough: literal newlines exercise command
+        // rendering while the long sleep keeps this shell observable.
+        fauxAssistantMessage(
+            [
+                fauxText("The command contains literal newlines; start it in the background for inspection."),
+                fauxToolCall("bash", {
+                    command: MULTILINE_REPRO_COMMAND,
+                    mode: "background",
+                }),
+            ],
+            { stopReason: "toolUse" },
+        ),
+        fauxAssistantMessage(MULTILINE_REPRO_FINAL_TEXT),
     ]);
+
+    let reproductionStarted = false;
+    let inspectorOpened = false;
+
+    pi.on("agent_settled", () => {
+        if (!reproductionStarted) {
+            reproductionStarted = true;
+            // agent_settled guarantees the original foreground/background selection run is done.
+            pi.sendUserMessage(MULTILINE_REPRO_PROMPT);
+            return;
+        }
+
+        if (!inspectorOpened) {
+            inspectorOpened = true;
+            // This uses pi's extension-command dispatch path, not simulated overlay rendering.
+            pi.sendUserMessage("/shell", { expandPromptTemplates: true });
+        }
+    });
 }

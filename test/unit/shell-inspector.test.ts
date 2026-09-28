@@ -83,6 +83,12 @@ function rightCell(line: string): string {
     return cells.length === 4 ? cells[2]!.trim() : "";
 }
 
+/** The left pane of one rendered body line; empty for the frame and separator lines. */
+function leftCell(line: string): string {
+    const cells = line.split("│");
+    return cells.length === 4 ? cells[1]!.trim() : "";
+}
+
 describe("shell inspector", () => {
     let stub: StubTheme;
     let inspector: ShellInspector;
@@ -487,5 +493,41 @@ describe("shell inspector", () => {
         assert.ok(narrow.every((line) => visibleWidth(line) === 70), "every row must fit the narrow frame");
         assert.ok(narrow.some((line) => line.includes("…")), "the pane must mark the truncation");
         assert.deepEqual(shellManager.getScreenLines("job-1"), [wide]);
+    });
+
+    it("normalizes a multiline command in both panes without changing the stored command", () => {
+        // Contract: command control sequences are removed and CR/LF/TAB become normalized spaces
+        // before the same job command is shown in the list and the selected-job details.
+        const rawCommand = "\x1b[31mprintf\x1b[0m\t'a\r\nb'  ok\x1b]0;title\x07";
+        const normalized = "printf 'a b' ok";
+        shellManager.startJob({
+            id: "job-1",
+            command: rawCommand,
+            cwd: "/work",
+            controller: new AbortController(),
+        });
+
+        const lines = inspector.render(WIDTH);
+        const listRow = lines
+            .map(leftCell)
+            .find((cell) => cell.startsWith("› ●"));
+        const detailsCommand = lines
+            .map(rightCell)
+            .find((cell) => cell.startsWith("● "));
+
+        assert.ok(
+            lines.every((line) => !/[\r\n\t]/.test(line)),
+            "each rendered element must contain one plain terminal row",
+        );
+        assert.ok(listRow?.startsWith(`› ● ${normalized}`), `unexpected job row: ${listRow}`);
+        assert.ok(listRow?.endsWith("running"), `unexpected job status: ${listRow}`);
+        assert.equal(detailsCommand, `● ${normalized}`);
+        assert.ok(!listRow?.includes("\x1b"), "terminal control sequences must not appear in the job row");
+        assert.ok(!detailsCommand?.includes("\x1b"), "terminal control sequences must not appear in the details command");
+        assert.equal(
+            shellManager.getJob("job-1")?.command,
+            rawCommand,
+            "render normalization must not rewrite the command stored on the job",
+        );
     });
 });

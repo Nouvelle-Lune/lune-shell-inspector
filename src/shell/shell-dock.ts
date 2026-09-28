@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, stripTerminalSequences } from "@earendil-works/pi-tui"
 import { shellManager } from "./shell-manager.ts";
+import { formatShellCommand } from "./shell-command.ts";
 
 
 const WIDGET_ID = "lune-shell-inspector";
@@ -100,7 +100,7 @@ function shellDockSummary(ctx: ExtensionContext): string {
         const elapsedTime = Math.floor((Date.now() - runningJob!.startedAt) / 1000);
         return [
             ctx.ui.theme.fg("accent", `${status.runningCount} running shell`),
-            truncateOutput(runningJob!.command, 20),
+            formatShellCommand(runningJob!.command, 20),
             `${elapsedTime}s`,
         ].join(ctx.ui.theme.fg("dim", " · "));
     }
@@ -129,17 +129,6 @@ function shellDockSummary(ctx: ExtensionContext): string {
     }
 
     return `${parts.join(ctx.ui.theme.fg("dim", " · "))}`;
-}
-
-function truncateOutput(output: string, maxLength: number): string {
-    output = stripTerminalSequences(output)
-        .replace(/[\r\n\t]/g, " ")
-        .replace(/ +/g, " ")
-        .trim();
-    if (visibleWidth(output) <= maxLength) {
-        return output;
-    }
-    return truncateToWidth(output, maxLength, "…");
 }
 
 export const shellDock = new ShellDock();

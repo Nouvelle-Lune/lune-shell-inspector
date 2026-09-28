@@ -11,10 +11,12 @@
  *
  * Four scenarios exist:
  *
- * - `selection` (default): `bash-selection-scenario.ts` scripts two turns that show how a model
- *   should choose the execution mode - a quick command whose result the turn needs is delegated in
+ * - `selection` (default): `bash-selection-scenario.ts` shows how a model should choose the execution
+ *   mode - a quick command whose result the turn needs is delegated in
  *   the foreground, and a long task that may continue independently runs in the background and
- *   appears in the dock and the `/shell` inspector.
+ *   appears in the dock and the `/shell` inspector. After those steps, it starts a multi-line
+ *   background command and automatically opens `/shell` to verify both command panes stay on one
+ *   line, the inspector frame stays intact, and Esc leaves no rows behind.
  * - `fixture`: one scripted bash call, for the row's (foreground, default) or the dock's
  *   (background, `LUNE_SHELL_INSPECTOR_MODE=background`) behaviour. Selected with a fixture id.
  * - `shelldocksum`: `shelldock-summary-scenario.ts` queues four scripted turns of background bash
@@ -71,7 +73,9 @@ which pi draws with its built-in bash renderers; a background call (mode: "backg
 immediately and appears in the shell dock below the editor and in the /shell inspector.
 
 The default scenario shows the model's mode selection: a quick command whose result the turn needs
-runs in the foreground, a long task that may continue independently runs in the background.
+runs in the foreground, then a long task runs in the background and settles. It then starts a
+multi-line background command and automatically opens /shell to verify both command panes render
+on one line, the frame stays intact, and Esc leaves no terminal rows behind.
 
   npm run tui:demo                        # default scenario: ${BASH_SELECTION_SCENARIO}
   npm run tui:demo -- progress            # single fixture call: ${DEFAULT_FIXTURE_ID} in the foreground
@@ -100,9 +104,15 @@ What to watch for in the selection scenario (default):
    scroll the pane (⇧↑/⇧↓, Home/End) while the shell runs.
 3. the closing text arrives after the shell settled, so the dock turns into
    "1 shell completed in <Ns> · /shell to open" and /shell still shows the finished job.
+4. after the original selection walkthrough, a second user message starts a background command
+   containing literal newlines ('set -euo pipefail', 'printf ...', 'sleep 300'). The scenario then
+   dispatches /shell automatically. Verify the command appears on one line in both panes and the
+   inspector frame is complete. Press Esc to close the overlay; no border or command rows should
+   remain on the terminal.
 
-The background command is the long-output fixture by default; LUNE_SHELL_INSPECTOR_FIXTURE,
-LUNE_SHELL_INSPECTOR_COMMAND and LUNE_SHELL_INSPECTOR_TIMEOUT change what runs in the background.
+The selection walkthrough's background command is the long-output fixture by default;
+LUNE_SHELL_INSPECTOR_FIXTURE, LUNE_SHELL_INSPECTOR_COMMAND and LUNE_SHELL_INSPECTOR_TIMEOUT change
+that command. The final multi-line reproduction command is fixed.
 
 What to watch for in a fixture run ("npm run tui:demo -- <id>" or LUNE_SHELL_INSPECTOR_FIXTURE=<id>):
 foreground (the default) draws the "$ <command>" row pi streams and settles - success, truncation

@@ -16,17 +16,24 @@ pi session, driven by a scripted model. Nothing is asserted here - the human wat
 
 | scenario | command | shows |
 | --- | --- | --- |
-| `selection` (default) | `npm run tui:demo` | the model's mode choice: a quick call in the foreground, a long one in the background with dock + `/shell` inspector |
+| `selection` (default) | `npm run tui:demo` | the existing foreground/background mode walkthrough, then a multi-line shell with `/shell` opened automatically |
 | `fixture` | `npm run tui:demo -- <fixture-id>` | one scripted `bash` call: the row for a foreground call, the dock for a background one (`LUNE_SHELL_INSPECTOR_MODE=background`) |
 | `shelldocksum` | `npm run tui:demo -- shelldocksum` | every dock summary shape in one run, plus the `/shell` inspector scroll demo |
 | `subagent` | `npm run tui:demo -- subagent` | a background `bash` call and a foreground subagent running together: shell dock + pi-subagents widget side by side |
 
-- `bash-selection-scenario.ts` (`selection`, the default) queues two tool turns plus a closing text:
+- `bash-selection-scenario.ts` (`selection`, the default) first queues the existing foreground and
+  background selection walkthrough plus its closing text. After it settles, the scenario starts a
+  multi-line background command and automatically dispatches `/shell` through
+  `pi.sendUserMessage("/shell", { expandPromptTemplates: true })`. The long-running command keeps
+  the inspector open for visual inspection. Verify the command appears as one line in both the job
+  list and selected-job details, and that the frame is complete. Press Esc to close it; no border or
+  command rows should remain on the terminal. The first three selection steps are unchanged:
   first a quick command whose result the turn needs, sent without a mode (foreground delegation);
   then the long-running fixture sent with `mode: "background"`, so it becomes a shell job that the
   dock and the `/shell` inspector show while it streams. The closing text waits for the job to
   settle, so the inspector can also be read on a finished shell. `LUNE_SHELL_INSPECTOR_FIXTURE`,
-  `LUNE_SHELL_INSPECTOR_COMMAND` and `LUNE_SHELL_INSPECTOR_TIMEOUT` change what runs in the background.
+  `LUNE_SHELL_INSPECTOR_COMMAND` and `LUNE_SHELL_INSPECTOR_TIMEOUT` change that original background
+  command; the final multi-line reproduction command is fixed.
 - `scripted-provider.ts` (`fixture`) queues exactly two responses: a `fauxToolCall("bash", {
   command[, timeout][, mode] })` with `stopReason: "toolUse"`, then `fixture finished`. The default
   mode is foreground, so the row streams; `LUNE_SHELL_INSPECTOR_MODE=background` turns the same call into a
@@ -105,10 +112,14 @@ The scripted model picks the mode, so one run shows both paths in order:
 3. the closing text arrives after the shell settled, so the dock turns into
    `1 shell completed in <Ns> · /shell to open` and `/shell` still lists the finished job with its
    complete output.
+4. the scenario starts another background shell with literal newlines in its command, then
+   automatically opens `/shell` through Pi's extension-command dispatch. Verify both command panes
+   show one line and the inspector frame is complete. Press Esc; the overlay should close without
+   leaving border or command rows on the terminal.
 
 The background command is the `long-output` fixture by default (200 lines, longer than the
 inspector's pane); `LUNE_SHELL_INSPECTOR_FIXTURE`, `LUNE_SHELL_INSPECTOR_COMMAND` and `LUNE_SHELL_INSPECTOR_TIMEOUT`
-change what runs in the background.
+change the selection walkthrough's background command. The final multi-line reproduction command is fixed.
 
 ### `fixture` runs
 
@@ -191,16 +202,19 @@ and read it as loose lines. This is evidence for a human reader, not an automati
 fails a build, and the headless tests own the contracts.
 
 `script` forwards its stdin, so the same recipe can type keystrokes. This one follows the selection
-scenario and opens the inspector on the background shell while it streams:
+scenario, waits for its automatic multi-line reproduction and `/shell` launch, closes the overlay
+with Esc, and then exits pi:
 
 ```
-(sleep 3; printf '/shell\r'; sleep 3; printf '\x1b'; sleep 3; printf '\x03'; sleep 2) \
-  | timeout 40 script -q /tmp/pisv-tui-selection-inspector.log npm run tui:demo >/dev/null 2>&1
+(sleep 16; printf '\x1b'; sleep 2; printf '/quit\r'; sleep 2) \
+  | timeout 40 script -q /tmp/pisv-tui-selection-inspector.log \
+      sh -c 'stty rows 45 cols 180; exec env TERM=xterm-256color npm run tui:demo' >/dev/null 2>&1
 ```
 
-Look for the foreground row settling first, then no row at all for the background call, the
-`1 running shell · ... · /shell to open` dock line, and the inspector frame with the growing output
-pane (`Output · <N> lines · running`). The keystroke recipe below is the shelldocksum variant that
+Look for the foreground row settling first, then no row at all for the original background call,
+the completed-shell dock line, and the automatically opened inspector with the multi-line command
+on one line in both panes and a complete frame. After Esc, verify no border or command rows remain
+on the underlying terminal. The keystroke recipe below is the shelldocksum variant that
 pauses and scrolls the `long-output` pane:
 
 ```
