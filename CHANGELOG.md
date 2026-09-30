@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Shell labels.** Background `bash` calls accept an optional `label`: a short human-readable
+  name that `/shell` shows in the job list instead of the command, since the left pane is too
+  narrow to show most commands. Labels are trimmed, blank ones are ignored, and they survive
+  session restore.
+
 ## [1.0.3] - 2026-09-28
 
 ### Fixed

@@ -79,7 +79,7 @@ Run:
 
 to open the shell inspector.
 
-The job list stays on the left; the selected shell's command, status, working directory, duration, exit information, and terminal output appear on the right.
+The job list stays on the left, showing a job's label when it has one and its command otherwise; the selected shell's command, status, working directory, duration, exit information, and terminal output appear on the right.
 
 Keyboard controls:
 
@@ -97,7 +97,7 @@ Output follows the newest lines by default. Scrolling upward pauses that follow 
 
 ### `bash`
 
-Foreground is the default. Background execution is intended for commands that can safely continue independently while the agent does other work.
+Foreground is the default. Background execution is intended for commands that can safely continue independently while the agent does other work. A background call may carry an optional `label`, which the `/shell` job list shows in place of the command.
 
 ### `background_shell`
 

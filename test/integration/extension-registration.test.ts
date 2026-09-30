@@ -247,10 +247,10 @@ describe("lune-shell-inspector registration", () => {
         );
     });
 
-    it("extends the built-in parameter schema with an optional foreground/background mode", () => {
-        // Contract: the wrapper reuses the built-in schema and adds exactly one parameter - `mode`,
-        // optional, limited to "foreground" and "background". Omitting it is what the extension
-        // treats as foreground, so the schema must not require it.
+    it("extends the built-in parameter schema with optional mode and label parameters", () => {
+        // Contract: the wrapper reuses the built-in schema and adds exactly two parameters - `mode`,
+        // limited to "foreground" and "background", and `label`, a free-form string. Both are
+        // optional: omitting `mode` is what the extension treats as foreground.
         const schema = tool.parameters as TSchema;
 
         assert.equal(Value.Check(schema, { command: "echo hello" }), true, "{command} must be accepted");
@@ -276,6 +276,16 @@ describe("lune-shell-inspector registration", () => {
             Value.Check(schema, { command: "sleep 1", timeout: "5" }),
             false,
             "the built-in timeout type must not be loosened",
+        );
+        assert.equal(
+            Value.Check(schema, { command: "sleep 1", mode: "background", label: "npm test" }),
+            true,
+            "a label next to a background mode must be accepted",
+        );
+        assert.equal(
+            Value.Check(schema, { command: "sleep 1", label: 5 }),
+            false,
+            "a label must be a string",
         );
     });
 });

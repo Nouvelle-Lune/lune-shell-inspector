@@ -87,17 +87,45 @@ describe("lune-shell-inspector background bash", () => {
             command: "echo job-fields",
             ctx: session.ctx,
             toolCallId: "call-fields",
+            label: "job fields",
         });
         const job = shellManager.getJob(jobId);
         assert.ok(job, "expected the started job");
 
         assert.equal(job.id, "call-fields");
         assert.equal(job.command, "echo job-fields");
+        assert.equal(job.label, "job fields", "the requested label must reach the job");
         assert.equal(job.cwd, session.ctx.cwd);
         assert.equal(job.status, "running");
         assert.equal(job.controller.signal.aborted, false, "a running job's controller is not aborted");
 
         await waitForJobSettled("call-fields");
+    });
+
+    it("normalizes the label before storing it on the job", async () => {
+        // Contract: labels come from model output, so a label is stored trimmed and a blank one is
+        // dropped - the inspector then falls back to showing the command.
+        const labelled = await startBackgroundBashCommand(session.tool, {
+            command: "echo labelled",
+            ctx: session.ctx,
+            toolCallId: "call-labelled",
+            label: "  training run  ",
+        });
+
+        assert.equal(shellManager.getJob(labelled.jobId)?.label, "training run");
+
+        await waitForJobSettled(labelled.jobId);
+
+        const blank = await startBackgroundBashCommand(session.tool, {
+            command: "echo unlabelled",
+            ctx: session.ctx,
+            toolCallId: "call-blank-label",
+            label: "   ",
+        });
+
+        assert.equal(shellManager.getJob(blank.jobId)?.label, undefined);
+
+        await waitForJobSettled(blank.jobId);
     });
 
     it("appends output to the job while the command is still running", async () => {

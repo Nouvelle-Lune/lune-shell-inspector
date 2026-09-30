@@ -369,9 +369,9 @@ export class ShellInspector implements Component {
 
             const name = selected
                 ? this.theme.bold(
-                    formatShellCommand(job.command, nameWidth),
+                    formatShellCommand(job.label ?? job.command, nameWidth),
                 )
-                : formatShellCommand(job.command, nameWidth);
+                : formatShellCommand(job.label ?? job.command, nameWidth);
 
             const gap = Math.max(
                 1,

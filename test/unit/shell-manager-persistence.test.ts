@@ -44,12 +44,13 @@ const killed = (error?: string): ShellJobOutcome => ({ type: "killed", error });
 /** Start a running job and return the controller stored with it. */
 function startRunningJob(
     manager: ShellManager,
-    overrides: Partial<{ id: string; command: string; cwd: string; controller: AbortController }> = {},
+    overrides: Partial<{ id: string; command: string; label: string; cwd: string; controller: AbortController }> = {},
 ): AbortController {
     const controller = overrides.controller ?? new AbortController();
     manager.startJob({
         id: overrides.id ?? "job-1",
         command: overrides.command ?? "sleep 5",
+        label: overrides.label,
         cwd: overrides.cwd ?? "/tmp",
         controller,
     });
@@ -134,10 +135,11 @@ describe("ShellManager persistence", () => {
         });
 
         it("writes one full snapshot carrying the job fields restore needs", () => {
-            // Contract: command, cwd, timestamps, outcome, output and the output totals are the fields
-            // a later session rebuilds a job from; a field dropped here is gone for the resumed session.
+            // Contract: label, command, cwd, timestamps, outcome, output and the output totals are the
+            // fields a later session rebuilds a job from; a field dropped here is gone for the resumed
+            // session.
             const manager = new ShellManager();
-            startRunningJob(manager, { id: "job-a", command: "npm test", cwd: "/work/app" });
+            startRunningJob(manager, { id: "job-a", command: "npm test", label: "nightly tests", cwd: "/work/app" });
             manager.appendOutput("job-a", "suite 1 ok\n");
             manager.settleJob("job-a", completed(0));
             const job = manager.getJob("job-a")!;
@@ -157,6 +159,7 @@ describe("ShellManager persistence", () => {
 
             const saved = snapshot.jobs[0]!;
             assert.equal(saved.id, "job-a");
+            assert.equal(saved.label, "nightly tests");
             assert.equal(saved.command, "npm test");
             assert.equal(saved.cwd, "/work/app");
             assert.equal(saved.status, "completed");
@@ -318,6 +321,7 @@ describe("ShellManager persistence", () => {
                 jobs: [
                     {
                         id: "job-a",
+                        label: "nightly tests",
                         command: "npm test",
                         cwd: "/work/app",
                         status: "failed",
@@ -343,6 +347,7 @@ describe("ShellManager persistence", () => {
             manager.restoreShellManager(contextFor(log));
 
             const job = manager.getJob("job-a")!;
+            assert.equal(job.label, "nightly tests");
             assert.equal(job.command, "npm test");
             assert.equal(job.cwd, "/work/app");
             assert.equal(job.status, "failed");

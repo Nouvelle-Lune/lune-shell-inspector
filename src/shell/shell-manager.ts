@@ -33,6 +33,7 @@ export type ShellJobStatus =
 
 export interface ShellJob {
     id: string;
+    label?: string;
     command: string;
     cwd: string;
 
@@ -118,6 +119,7 @@ export class ShellManager {
     startJob(input: {
         id: string;
         command: string;
+        label?: string;
         cwd: string;
         controller: AbortController;
     }): void {
@@ -132,6 +134,7 @@ export class ShellManager {
         this.jobs.set(input.id, {
             id: input.id,
             command: input.command,
+            label: input.label,
             cwd: input.cwd,
             status: "running",
             startedAt: now,
@@ -472,6 +475,7 @@ export class ShellManager {
         }
         return {
             id: job.id,
+            label: job.label,
             command: job.command,
             cwd: job.cwd,
             status: job.status,

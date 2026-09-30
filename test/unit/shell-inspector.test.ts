@@ -72,8 +72,8 @@ async function writeOutput(id: string, output: string): Promise<void> {
 }
 
 /** Add a running job whose output is already complete for the purposes of rendering. */
-async function addJob(id: string, command: string, output: string): Promise<void> {
-    shellManager.startJob({ id, command, cwd: "/work", controller: new AbortController() });
+async function addJob(id: string, command: string, output: string, label?: string): Promise<void> {
+    shellManager.startJob({ id, command, label, cwd: "/work", controller: new AbortController() });
     await writeOutput(id, output);
 }
 
@@ -493,6 +493,23 @@ describe("shell inspector", () => {
         assert.ok(narrow.every((line) => visibleWidth(line) === 70), "every row must fit the narrow frame");
         assert.ok(narrow.some((line) => line.includes("…")), "the pane must mark the truncation");
         assert.deepEqual(shellManager.getScreenLines("job-1"), [wide]);
+    });
+
+    it("lists a labelled job by its label while the details keep the command", async () => {
+        // Contract: the left pane is narrow, so a label replaces the command there; the details pane
+        // still shows the full command the job runs.
+        await addJob("job-1", "python train.py --config configs/long.json", lineOutput(1), "training run");
+
+        const lines = inspector.render(WIDTH);
+        const listRow = lines
+            .map(leftCell)
+            .find((cell) => cell.startsWith("› ●"));
+        const detailsCommand = lines
+            .map(rightCell)
+            .find((cell) => cell.startsWith("● "));
+
+        assert.ok(listRow?.startsWith("› ● training run"), `unexpected job row: ${listRow}`);
+        assert.equal(detailsCommand, "● python train.py --config configs/long.json");
     });
 
     it("normalizes a multiline command in both panes without changing the stored command", () => {

@@ -57,7 +57,11 @@ export function BashTool() {
                     `"background" returns immediately while the command continues running independently.`,
                 default: "foreground",
             }),
-        )
+        ),
+        label: Type.Optional(
+            Type.String({
+                description: "A short human-readable label for a background command, shown in the /shell inspector; ignored in foreground mode.",
+            })),
     });
 
     return defineTool({
@@ -70,6 +74,7 @@ export function BashTool() {
         promptGuidelines: [
             "Use foreground mode when no useful work can proceed until the command finishes.",
             "Use background mode for independent long-running work so you can continue with other useful work while it runs.",
+            "Provide a human-readable label for background commands when it helps the user identify them in the /shell inspector.",
             "Never use foreground sleep commands, polling loops, or repeated status checks solely to wait for a background shell to finish.",
             "If no useful independent work remains, end the current turn and rely on the background shell's completion notification to resume work.",
             "Use background_shell only when you genuinely need intermediate status or output before completion, not to poll for completion.",
@@ -95,23 +100,25 @@ export function BashTool() {
             // background shells, so a foreground call must not touch the manager.
             if ((params.mode ?? "foreground") === "foreground") {
                 // The built-in tool binds its cwd at construction time, and ctx.cwd can differ from
-                // process.cwd(); rebuild it per call.
+                // process.cwd(); rebuild it per call. Only its own parameters are passed on: `mode`
+                // and `label` are wrapper-only.
                 const builtInBash = createBashTool(ctx.cwd);
                 return builtInBash.execute(
                     toolCallId,
-                    params,
+                    { command: params.command, timeout: params.timeout },
                     signal,
                     onUpdate,
                 );
             }
 
             // Background returns at once; the detached execution settles the job later.
-            return startBackgroundShell(
+            return startBackgroundShell({
                 toolCallId,
-                params.command,
-                params.timeout,
-                ctx
-            );
+                command: params.command,
+                label: params.label,
+                timeout: params.timeout,
+                ctx,
+            });
 
         },
     });

@@ -17,18 +17,22 @@ const backgroundOps = createLocalBashOperations();
  * settles it once the process ends - completed only on exit code 0, failed with the code and reason
  * on any other exit - or the execution itself fails.
  */
-export function startBackgroundShell(
-    toolCallId: string,
-    command: string,
-    timeout: number | undefined,
-    ctx: ExtensionContext,
-): AgentToolResult {
+export function startBackgroundShell(input: {
+    toolCallId: string;
+    command: string;
+    label?: string;
+    timeout?: number;
+    ctx: ExtensionContext;
+}): AgentToolResult {
+    const { toolCallId, command, ctx, timeout } = input;
+
     // The job owns this controller so a kill can abort the running process tree.
     const controller = new AbortController();
 
     shellManager.startJob({
         id: toolCallId,
         command,
+        label: normalizeLabel(input.label),
         cwd: ctx.cwd,
         controller: controller,
     });
@@ -95,4 +99,15 @@ export function startBackgroundShell(
             background: true,
         },
     };
+}
+
+/** Strict JSON-schema providers can send `null` for an optional param, so nothing is assumed. */
+function normalizeLabel(label: unknown): string | undefined {
+    if (typeof label !== "string") {
+        return undefined;
+    }
+
+    const trimmed = label.trim();
+
+    return trimmed.length > 0 ? trimmed : undefined;
 }

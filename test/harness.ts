@@ -57,6 +57,7 @@ export interface BashToolParams {
     command: string;
     timeout?: number;
     mode?: BashMode;
+    label?: string;
 }
 
 /** Payload of one `onUpdate` callback or of the final result; `details` is the bash tool details. */
@@ -747,6 +748,8 @@ export interface BashRunOptions {
     timeout?: number;
     /** Execution mode; omitted means the tool's own `foreground` default. */
     mode?: BashMode;
+    /** Optional label forwarded through the tool params; background mode only. */
+    label?: string;
     /** Abort signal handed to the tool; a fresh, never aborted signal by default. */
     signal?: AbortSignal;
     toolCallId?: string;
@@ -798,6 +801,9 @@ export async function runBashCommand(tool: BashToolDefinition, options: BashRunO
     }
     if (options.mode !== undefined) {
         params.mode = options.mode;
+    }
+    if (options.label !== undefined) {
+        params.label = options.label;
     }
     const ctx = options.ctx === null ? undefined : (options.ctx ?? createFakeContext(process.cwd()));
     const signal = options.signal ?? new AbortController().signal;
