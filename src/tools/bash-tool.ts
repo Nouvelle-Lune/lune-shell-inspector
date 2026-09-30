@@ -68,10 +68,12 @@ export function BashTool() {
         promptSnippet:
             "Run shell commands in foreground or background; background commands keep running independently and remain observable.",
         promptGuidelines: [
-            "Use foreground mode when subsequent work depends on the command result before continuing.",
+            "Use foreground mode when no useful work can proceed until the command finishes.",
             "Use background mode for independent long-running work so you can continue with other useful work while it runs.",
-            "When creating long-running scripts or commands, make them observable with meaningful periodic progress output when practical, such as tqdm progress, stage logs, counters, or epoch updates.",
-            "Do not keep a command in foreground only to wait for its final result when the work can safely run independently; background commands report their final status and output back to the agent when they finish.",
+            "Never use foreground sleep commands, polling loops, or repeated status checks solely to wait for a background shell to finish.",
+            "If no useful independent work remains, end the current turn and rely on the background shell's completion notification to resume work.",
+            "Use background_shell only when you genuinely need intermediate status or output before completion, not to poll for completion.",
+            "When writing long-running scripts or programs, make them observable by design with live progress output such as tqdm, counters, stage logs, or epoch/step updates appropriate to the workload.",
         ],
 
         renderCall(args, theme, context) {
