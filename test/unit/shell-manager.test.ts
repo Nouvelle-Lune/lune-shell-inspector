@@ -301,6 +301,37 @@ describe("ShellManager", () => {
             assert.equal(manager.getJob("job-a")?.status, "killed");
         });
 
+        it("refuses the agent's killed outcome on a settled job and keeps the first outcome", () => {
+            // Contract: the terminal state is only ever entered through settleJob, and it is
+            // entered once. A completed, failed or already killed job refuses a second kill - the
+            // agent's repeated request, like the runner's late abort rejection - without another
+            // event, counter move or rewrite of the recorded outcome.
+            const outcomes = [completed(0), failed("boom", 3), killed("Shell killed by agent")];
+
+            for (const outcome of outcomes) {
+                const manager = new ShellManager();
+                startRunningJob(manager, { id: "job-a" });
+                assert.equal(manager.settleJob("job-a", outcome), true);
+                const settled = manager.getJob("job-a")!;
+                const stats = manager.getAllJobsStatusStat();
+                const events: string[] = [];
+                manager.subscribe((event) => events.push(event.type));
+
+                assert.equal(
+                    manager.settleJob("job-a", killed("Shell killed by agent")),
+                    false,
+                    `a ${settled.status} job must refuse another kill`,
+                );
+
+                const job = manager.getJob("job-a")!;
+                assert.equal(job.status, settled.status, "a refused kill must not change the status");
+                assert.equal(job.error, settled.error, "a refused kill must not rewrite the reason");
+                assert.equal(job.finishedAt, settled.finishedAt, "a refused kill must not restamp the finish");
+                assert.deepEqual(events, [], "a refused kill must not emit another event");
+                assert.deepEqual(manager.getAllJobsStatusStat(), stats, "a refused kill must not move a counter");
+            }
+        });
+
         it("settles the job and keeps later listeners running when an earlier listener throws", () => {
             // Desired contract: observers cannot veto a mutation. A throwing listener must not make
             // the settle fail, hide the event from later listeners, or move a counter twice.

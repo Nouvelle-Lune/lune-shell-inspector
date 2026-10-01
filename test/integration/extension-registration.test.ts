@@ -2,15 +2,18 @@
  * Registration contract of lune-shell-inspector.
  *
  * The extension replaces pi's built-in `bash` tool by registering another definition under the same
- * name, and registers `background_shell` for reading the jobs that wrapper starts. These tests
- * assert what pi receives at load time: the two tool definitions, the built-in metadata
+ * name, registers `background_shell` for reading the jobs that wrapper starts, and registers
+ * `kill_background_shell` as the separate stop path for exactly one of those jobs. These tests
+ * assert what pi receives at load time: the three tool definitions, the built-in metadata
  * (description base, constrained sampling) plus the wrapper's own optional `mode` parameter and
- * prompt metadata, `background_shell`'s jobs schema, and the renderer contract - pi's
- * `withBuiltInRenderers` only fills renderers a definition does not supply, so the wrapper supplies
- * its own: foreground rows delegate to the built-in bash renderers, background rows render empty.
- * Execution behaviour is covered by `test/integration/bash-delegation.test.ts` (foreground),
- * `test/integration/background-bash.test.ts` (background mode) and
- * `test/integration/background-shell-tool.test.ts` (inspection).
+ * prompt metadata, `background_shell`'s jobs schema, `kill_background_shell`'s jobID schema, and
+ * the renderer contract - pi's `withBuiltInRenderers` only fills renderers a definition does not
+ * supply, so the wrapper supplies its own: foreground rows delegate to the built-in bash renderers,
+ * background rows render empty. Execution behaviour is covered by
+ * `test/integration/bash-delegation.test.ts` (foreground),
+ * `test/integration/background-bash.test.ts` (background mode),
+ * `test/integration/background-shell-tool.test.ts` (inspection) and
+ * `test/integration/kill-background-shell-tool.test.ts` (kill).
  */
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
@@ -86,16 +89,17 @@ describe("lune-shell-inspector registration", () => {
         removeTempWorkDir(workDir);
     });
 
-    it("registers the bash wrapper plus the background_shell inspector", () => {
+    it("registers the bash wrapper, the background_shell inspector and the kill_background_shell tool", () => {
         // Contract: the wrapper replaces the built-in tool under the same name, so pi uses it
-        // instead of the built-in one, and `background_shell` reads the jobs that wrapper starts.
-        // Both come from one extension because they share the module-level shell manager. The
-        // description is the built-in one plus the wrapper's own guidance for background mode.
+        // instead of the built-in one, `background_shell` reads the jobs that wrapper starts, and
+        // `kill_background_shell` stops exactly one of those jobs. All three come from one
+        // extension because they share the module-level shell manager. The description is the
+        // built-in one plus the wrapper's own guidance for background mode.
         const registered = registerExtension(workDir).registeredTools;
         assert.deepEqual(
             registered.map((entry) => entry.name),
-            ["bash", "background_shell"],
-            "the extension must register the bash wrapper and the background_shell inspector",
+            ["bash", "background_shell", "kill_background_shell"],
+            "the extension must register the bash wrapper, the background_shell inspector and the kill tool",
         );
 
         const registeredTool = registered.find((entry) => entry.name === "bash");
@@ -169,6 +173,26 @@ describe("lune-shell-inspector registration", () => {
         assert.ok(
             (tool.promptGuidelines ?? []).some((line) => /intermediate output/i.test(line)),
             "the guidelines must explain when to pull intermediate output",
+        );
+    });
+
+    it("registers kill_background_shell with a jobID-only schema", () => {
+        // Contract: killing is a separate tool from inspection, and it takes exactly one managed
+        // job id - no PID, command name, process-name matching or arrays - so the model cannot reach
+        // anything but a shell the manager already owns. A missing or non-string id is rejected
+        // before execution, and background_shell's jobs shape is not accepted here.
+        const killTool = loadRegisteredTool(workDir, "kill_background_shell");
+        const schema = killTool.parameters as TSchema;
+
+        assert.equal(killTool.name, "kill_background_shell");
+        assert.equal(Value.Check(schema, { jobID: "call-123" }), true);
+        assert.equal(Value.Check(schema, {}), false, "a missing jobID must be rejected");
+        assert.equal(Value.Check(schema, { jobID: 123 }), false, "a non-string jobID must be rejected");
+        assert.equal(Value.Check(schema, { jobID: ["call-123"] }), false, "an array of ids must not be accepted");
+        assert.equal(
+            Value.Check(schema, { jobs: [{ jobID: "call-123" }] }),
+            false,
+            "the kill tool must not accept background_shell's jobs shape",
         );
     });
 

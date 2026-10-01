@@ -4,6 +4,10 @@
 
 ### Added
 
+- **Agent kill tool.** `kill_background_shell` stops one managed background shell by its job ID,
+  aborting the shell's process tree through the same manager primitive as `/shell`'s `x` key so the
+  agent never needs a pid. A killed shell stays listed as `killed`, with its output still readable
+  through `background_shell` and `/shell`, until it is explicitly cleared.
 - **Shell labels.** Background `bash` calls accept an optional `label`: a short human-readable
   name that `/shell` shows in the job list instead of the command, since the left pane is too
   narrow to show most commands. Labels are trimmed, blank ones are ignored, and they survive

@@ -10,10 +10,12 @@
  * row renders empty because the detached job is reported by the shell dock and the `/shell`
  * inspector, not by a transcript row that could never stream the output.
  *
- * The same module also defines `background_shell`, the pull side of background mode: the immediate
- * `bash` result cannot report a detached job, so the model needs a way to ask for a job's current
- * status or intermediate output before the completion notification arrives. Both definitions read
- * the same module-level `ShellManager`, so a job started through one is visible to the other.
+ * The same module also defines the lifecycle controls for background mode: `background_shell`, the
+ * pull side (the immediate `bash` result cannot report a detached job, so the model needs a way to
+ * ask for a job's current status or intermediate output before the completion notification
+ * arrives), and `kill_background_shell`, which stops one managed job through its job id instead of
+ * a pid. All definitions read the same module-level `ShellManager`, so a job started through one is
+ * visible to the others.
  */
 import {
     createBashTool,
@@ -233,6 +235,63 @@ export function BackgroundShellTool() {
             );
 
             return backgroundShellText(blocks.join("\n\n"));
+        },
+    });
+}
+
+const killBackgroundShellSchema = Type.Object({
+    jobID: Type.String({
+        description: "Background shell ID to kill.",
+    }),
+});
+
+/**
+ * Build the `kill_background_shell` tool definition.
+ *
+ * The stable handle on a detached shell is the shell manager's job id, and the model never sees a
+ * pid, so stopping a shell early has to abort the job through the manager rather than a generic
+ * process-kill command. A kill is not a clear: the job keeps its output and terminal, stays
+ * readable through `background_shell` and `/shell`, and is only removed by an explicit clear.
+ */
+export function KillBackgroundShellTool() {
+    return defineTool({
+        name: "kill_background_shell",
+        label: "Kill Background Shell",
+        description:
+            "Stop one managed background shell and abort its process tree.",
+        parameters: killBackgroundShellSchema,
+
+        promptSnippet:
+            "Stop a managed background shell started by bash mode=background.",
+        promptGuidelines: [
+            "Kill a background shell only when its running work is no longer wanted, not merely because no other useful work remains.",
+            "Identify the shell by the job ID reported by bash mode=background or background_shell; the job ID is the only handle, and a killed shell stays inspectable until it is cleared.",
+        ],
+
+        async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+            const job = shellManager.getJob(params.jobID);
+
+            // Unknown ids and jobs that already settled are caller mistakes, not tool failures, so
+            // they are answered inline instead of thrown.
+            if (!job) {
+                return backgroundShellText(`Unknown background shell: ${params.jobID}`);
+            }
+
+            // settleJob is the manager's single terminal-state entry point, so an agent kill goes
+            // through the same killed outcome path as `/shell`'s kill key; a refusal means the job
+            // is no longer running and the kill must leave it untouched.
+            const settled = shellManager.settleJob(params.jobID, {
+                type: "killed",
+                error: "Shell killed by agent",
+            });
+
+            if (!settled) {
+                return backgroundShellText(
+                    `Background shell ${params.jobID} is not running: ${job.status}`,
+                );
+            }
+
+            return backgroundShellText(`Background shell ${params.jobID} killed.`);
         },
     });
 }
