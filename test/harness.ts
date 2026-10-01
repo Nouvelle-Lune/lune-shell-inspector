@@ -20,7 +20,8 @@
  *   `session_start` / `session_shutdown` itself;
  * - a fake extension context whose `ui.setWidget` models pi's real keyed widget registry
  *   (`setExtensionWidget`: placement buckets, key replacement, reinsertion moves a key to the end),
- *   and whose `ui.theme.fg` records every colour request while returning the text unstyled;
+ *   whose `ui.custom` records the overlay factory instead of running pi's overlay, and whose
+ *   `ui.theme` returns text unstyled while recording every `fg` request;
  * - real command execution through the delegated implementation.
  * Renderers are called directly by the registration tests, which pin the delegation contract; the
  * TUI itself is not simulated, and the real TUI is observed through `test/tui`.
@@ -140,6 +141,12 @@ export interface WidgetCall {
     placement: WidgetPlacement | undefined;
 }
 
+/** One captured `ctx.ui.custom` call: the overlay factory and the options it was opened with. */
+export interface CustomCall {
+    factory: (...args: unknown[]) => unknown;
+    options: unknown;
+}
+
 /** One captured `notify` call, in call order. */
 export interface NotifyCall {
     message: string;
@@ -172,16 +179,20 @@ export interface ThemeFgCall {
  * `setWidget` mirrors pi's `setExtensionWidget`: content is stored per placement bucket under the
  * key, `undefined` removes the key, and re-setting an existing key removes then re-inserts it, so
  * the key moves to the end of its bucket (the behaviour pi-subagents' renderer explicitly works
- * around). Every call is also captured verbatim so tests can assert what the extension asked for.
- * `theme.fg` records its colour and returns the text unchanged: the tests assert the readable line
- * and the requested colour separately, instead of an ANSI escape sequence.
+ * around). Every call is also captured verbatim so tests can assert what the extension asked for,
+ * and `custom` records the overlay factory instead of running pi's overlay. `theme.fg` records its
+ * colour and both `fg` and `bold` return the text unchanged: the tests assert the readable line and
+ * the requested colour separately, instead of an ANSI escape sequence.
  */
 export interface FakeExtensionUi {
     readonly notifyCalls: readonly NotifyCall[];
     readonly widgetCalls: readonly WidgetCall[];
+    readonly customCalls: readonly CustomCall[];
     readonly fgCalls: readonly ThemeFgCall[];
-    readonly theme: { fg(color: string, text: string): string };
+    readonly theme: { fg(color: string, text: string): string; bold(text: string): string };
     notify(message: string, type?: string): void;
+    /** Open a custom overlay; the fake records the factory instead of running pi's overlay. */
+    custom(factory: (...args: unknown[]) => unknown, options?: unknown): Promise<unknown>;
     setWidget(key: string, content: WidgetContent | undefined, options?: { placement?: WidgetPlacement }): void;
     /** Content currently mounted for `key`, or `undefined` when the key is not mounted. */
     mountedWidget(placement: WidgetPlacement, key: string): WidgetContent | undefined;
@@ -197,11 +208,13 @@ export function createFakeUi(): FakeExtensionUi {
     };
     const notifyCalls: NotifyCall[] = [];
     const widgetCalls: WidgetCall[] = [];
+    const customCalls: CustomCall[] = [];
     const fgCalls: ThemeFgCall[] = [];
 
     return {
         notifyCalls,
         widgetCalls,
+        customCalls,
         fgCalls,
 
         theme: {
@@ -209,10 +222,18 @@ export function createFakeUi(): FakeExtensionUi {
                 fgCalls.push({ color, text });
                 return text;
             },
+            bold(text) {
+                return text;
+            },
         },
 
         notify(message, type) {
             notifyCalls.push({ message, type });
+        },
+
+        custom(factory, options) {
+            customCalls.push({ factory, options });
+            return Promise.resolve(undefined);
         },
 
         setWidget(key, content, options) {
@@ -493,6 +514,8 @@ export interface AppendEntryCall {
 export interface FakeContextOptions {
     /** Value of `ctx.hasUI`; `true` by default, like an interactive pi session. */
     hasUI?: boolean;
+    /** Value of `ctx.mode`; `"tui"` by default, like an interactive pi session. */
+    mode?: ExtensionContext["mode"];
     /** UI to expose as `ctx.ui`; a fresh {@link createFakeUi} by default. */
     ui?: FakeExtensionUi;
     /**
@@ -507,14 +530,16 @@ export interface FakeContextOptions {
 /**
  * Minimal extension context pi would pass to a session handler or a tool call.
  *
- * `ui` is a {@link FakeExtensionUi} and `hasUI` defaults to `true`; set `hasUI: false` to model a
- * print/RPC session without an interactive UI. `cwd` is what the extension reads for the shell job
- * and for the delegated bash tool; `sessionManager` is the session's real pi `SessionManager`.
+ * `ui` is a {@link FakeExtensionUi} and `hasUI`/`mode` default to `true`/`"tui"`; set `hasUI: false`
+ * or `mode: "print"` to model a session without an interactive UI. `cwd` is what the extension
+ * reads for the shell job and for the delegated bash tool; `sessionManager` is the session's real pi
+ * `SessionManager`.
  */
 export function createFakeContext(cwd: string, options: FakeContextOptions = {}): ExtensionContext {
     const ui = options.ui ?? createFakeUi();
     return {
         cwd,
+        mode: options.mode ?? "tui",
         hasUI: options.hasUI ?? true,
         ui,
         sessionManager: sessionContext(options.sessionLog),

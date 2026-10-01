@@ -8,6 +8,16 @@
   name that `/shell` shows in the job list instead of the command, since the left pane is too
   narrow to show most commands. Labels are trimmed, blank ones are ignored, and they survive
   session restore.
+- **Inspector clear key.** Pressing `c` in `/shell` removes the selected shell when it has settled
+  (`completed`, `failed` or `killed`) and refuses a running one without touching its process. The
+  footer answers either outcome with a short-lived notice that replaces the key hints, and the
+  persistent hints now advertise `c to clear`.
+
+### Changed
+
+- **`/shell` opens on an empty job list.** The inspector renders an empty frame instead of doing
+  nothing when there are no shell jobs, and clearing the last entry keeps that frame on screen
+  rather than closing the overlay.
 
 ## [1.0.3] - 2026-09-28
 

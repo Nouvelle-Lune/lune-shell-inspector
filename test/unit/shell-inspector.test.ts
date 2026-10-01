@@ -1,5 +1,5 @@
 /**
- * Unit tests for the shell inspector's keys: output scrolling and killing the selected shell.
+ * Unit tests for the shell inspector's keys: output scrolling, killing and clearing the selected shell.
  *
  * The inspector renders the selected job's output tail in a fixed pane, and the scroll keys shift
  * which lines that pane shows: Shift+Up/Shift+K one line older, Shift+Down/Shift+J one line newer,
@@ -11,6 +11,12 @@
  * a destructive key without a confirmation step, so the tests pin what it must and must not touch:
  * the selected shell only - never one that already settled, and never the same shell twice - and the
  * killed shell stays listed and readable afterwards.
+ *
+ * `c` clears the selected settled shell (`completed`, `failed` or `killed`) out of the manager. A
+ * running shell is refused, and either outcome answers in the footer: the notice replaces the key
+ * hints until it expires on its own. The tests also pin what clearing must not do: touch the
+ * process, clear a shell that is not selected, or reset the selection / output pause that belongs
+ * to another shell.
  *
  * The tests render the real component against the real `shellManager` singleton with a recording
  * stub theme, so assertions read plain strings (no ANSI) and the paused marker can be checked by
@@ -25,7 +31,7 @@ import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 import { ShellInspector } from "../../src/shell/shell-inspector.ts";
-import { shellManager } from "../../src/shell/shell-manager.ts";
+import { shellManager, type ShellJobOutcome } from "../../src/shell/shell-manager.ts";
 import { readJobScreen } from "../harness.ts";
 
 /** Raw sequences a terminal sends for the inspector's keys. */
@@ -65,6 +71,11 @@ function lineOutput(count: number): string {
     return Array.from({ length: count }, (_, index) => `line ${index + 1}`).join("\n");
 }
 
+/** Output of `count` prefixed, numbered lines, oldest first. */
+function prefixedOutput(prefix: string, count: number): string {
+    return Array.from({ length: count }, (_, index) => `${prefix} ${index + 1}`).join("\n");
+}
+
 /** Write a job's output and wait until the emulator has executed it. */
 async function writeOutput(id: string, output: string): Promise<void> {
     shellManager.appendOutput(id, output);
@@ -75,6 +86,17 @@ async function writeOutput(id: string, output: string): Promise<void> {
 async function addJob(id: string, command: string, output: string, label?: string): Promise<void> {
     shellManager.startJob({ id, command, label, cwd: "/work", controller: new AbortController() });
     await writeOutput(id, output);
+}
+
+/** Add a job and settle it, so the clear key can act on it. */
+async function addSettledJob(
+    id: string,
+    command: string,
+    output: string,
+    outcome: ShellJobOutcome = { type: "completed", exitCode: 0 },
+): Promise<void> {
+    await addJob(id, command, output);
+    shellManager.settleJob(id, outcome);
 }
 
 /** The right pane of one rendered line; empty for the separator and border lines. */
@@ -93,18 +115,22 @@ describe("shell inspector", () => {
     let stub: StubTheme;
     let inspector: ShellInspector;
     let renderRequests: number;
+    let closeRequests: number;
 
     beforeEach(() => {
         shellManager.clearAllJobs();
         stub = createStubTheme();
         renderRequests = 0;
+        closeRequests = 0;
 
         inspector = new ShellInspector(
             { ui: { theme: stub.theme } } as unknown as ExtensionContext,
             () => {
                 renderRequests += 1;
             },
-            () => { },
+            () => {
+                closeRequests += 1;
+            },
             () => TERMINAL_ROWS,
             stub.theme,
         );
@@ -172,6 +198,11 @@ describe("shell inspector", () => {
             .filter((call) => call.color === "warning")
             .at(-1)
             ?.text;
+    }
+
+    /** The footer row of the newest frame: the key hints, or the notice that replaced them. */
+    function footerLine(): string {
+        return inspector.render(WIDTH).at(-2) ?? "";
     }
 
     it("pins the output pane to the newest lines", async () => {
@@ -479,6 +510,172 @@ describe("shell inspector", () => {
         const footer = frame().lines.at(-2) ?? "";
 
         assert.ok(footer.includes("x to kill"), `the footer must show the kill key: ${footer}`);
+        assert.ok(footer.includes("Esc to close"), `the footer must still show the close key: ${footer}`);
+    });
+
+    for (const status of ["completed", "failed", "killed"] as const) {
+        it(`clears a ${status} shell with c and reports success`, async () => {
+            const outcome: ShellJobOutcome = status === "completed"
+                ? { type: "completed", exitCode: 0 }
+                : status === "failed"
+                    ? { type: "failed", error: "boom", exitCode: 1 }
+                    : { type: "killed", error: "manual kill" };
+            await addSettledJob("job-1", "npm test", "suite ok\n", outcome);
+
+            press("c");
+
+            assert.equal(shellManager.getJob("job-1")?.id, undefined, "the cleared shell must leave the manager");
+            assert.deepEqual(shellManager.getAllJobsStatusStat(), {
+                runningCount: 0,
+                completedCount: 0,
+                failedCount: 0,
+                killedCount: 0,
+            });
+
+            const { lines, fgCalls } = frame();
+            const footer = lines.at(-2) ?? "";
+            const success = "Cleared npm test";
+
+            assert.ok(footer.includes(success), `the footer must confirm the clear: ${footer}`);
+            assert.ok(!footer.includes("x to kill"), "the notice must replace the key hints");
+            assert.ok(
+                fgCalls.some((call) => call.color === "success" && call.text.includes(success)),
+                "the confirmation must use the success colour",
+            );
+        });
+    }
+
+    it("refuses to clear a running shell with the accent notice", async () => {
+        await addJob("job-1", "sleep 60", "still running\n");
+        const controller = shellManager.getJob("job-1")!.controller;
+        const redrawsBefore = renderRequests;
+
+        press("c");
+
+        const job = shellManager.getJob("job-1");
+        assert.ok(job);
+        assert.equal(job.status, "running", "a running shell must not be cleared");
+        assert.equal(controller.signal.aborted, false, "the refusal must not touch the process");
+        assert.deepEqual(shellManager.getAllJobsStatusStat(), {
+            runningCount: 1,
+            completedCount: 0,
+            failedCount: 0,
+            killedCount: 0,
+        });
+        assert.equal(renderRequests, redrawsBefore + 1, "the refusal must repaint the footer");
+
+        const { lines, fgCalls } = frame();
+        const footer = lines.at(-2) ?? "";
+        const refusal = "Clear failed, only completed, failed, or killed";
+
+        assert.ok(footer.includes(refusal), `the footer must explain the refusal: ${footer}`);
+        assert.ok(!footer.includes("x to kill"), "the notice must replace the key hints");
+        assert.ok(
+            fgCalls.some((call) => call.color === "accent" && call.text.includes(refusal)),
+            "the refusal must use the accent colour",
+        );
+    });
+
+    it("hides the notice by itself and restores the key hints", async (t) => {
+        await addSettledJob("job-1", "echo done", "done\n");
+
+        // Timers are mocked only after the job's terminal write flushed: xterm parses its write
+        // queue through setTimeout, so mocking any earlier would hang the setup. Ticking a generous
+        // span keeps the assertion independent of how long the notice is meant to live.
+        t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+
+        press("c");
+
+        assert.ok(footerLine().includes("Cleared echo done"), "the notice must be visible right after the clear");
+
+        t.mock.timers.tick(30_000);
+
+        assert.ok(!footerLine().includes("Cleared echo done"), "the notice must disappear on its own");
+        assert.ok(footerLine().includes("x to kill"), "the key hints must come back");
+    });
+
+    it("keeps the selection position when a cleared shell slides the next one up", async () => {
+        await addSettledJob("job-a", "cmd-a", "output-a\n");
+        await addSettledJob("job-b", "cmd-b", "output-b\n");
+        await addSettledJob("job-c", "cmd-c", "output-c\n");
+
+        press("j"); // select job-b
+        press("c");
+
+        assert.deepEqual(
+            shellManager.getAllJobsList().map((job) => job.id),
+            ["job-a", "job-c"],
+        );
+        assert.deepEqual(visibleOutput(), ["output-c"], "the shell that took the cleared position must be selected");
+        assert.ok(
+            frame().lines.map(leftCell).some((cell) => cell.startsWith("› ● cmd-c")),
+            "the job list must highlight the shell that took the cleared position",
+        );
+    });
+
+    it("selects the new last shell when the cleared one was last", async () => {
+        await addSettledJob("job-a", "cmd-a", "output-a\n");
+        await addSettledJob("job-b", "cmd-b", "output-b\n");
+
+        press("j"); // select job-b, the last shell
+        press("c");
+
+        assert.deepEqual(shellManager.getAllJobsList().map((job) => job.id), ["job-a"]);
+        assert.deepEqual(visibleOutput(), ["output-a"]);
+    });
+
+    it("follows the newly selected shell's newest output after clearing a paused shell", async () => {
+        await addSettledJob("job-a", "tail -f a.log", prefixedOutput("a", 40));
+        await addSettledJob("job-b", "tail -f b.log", prefixedOutput("b", 40));
+
+        press("j"); // select job-b
+        press(SHIFT_UP);
+        assert.equal(pausedMarker(), " · paused ↑1");
+
+        press("c");
+
+        assert.equal(shellManager.getJob("job-b")?.id, undefined);
+        assert.equal(pausedMarker(), undefined, "the newly selected shell must follow its newest output");
+        assert.equal(visibleOutput().at(-1), "a 40");
+    });
+
+    it("keeps the inspector open on an empty frame after the last shell is cleared", async () => {
+        await addSettledJob("job-1", "echo done", "done\n");
+
+        press("c");
+
+        const lines = inspector.render(WIDTH);
+
+        assert.ok(lines.length > 0, "the overlay must keep drawing a frame");
+        assert.ok(lines[0]!.includes("┌"), `the top border must stay: ${JSON.stringify(lines)}`);
+        assert.ok(lines.at(-1)!.includes("└"), `the bottom border must stay: ${JSON.stringify(lines)}`);
+        assert.ok(!lines.some((line) => line.includes("› ●")), "no job may be listed");
+        assert.equal(closeRequests, 0, "clearing the last shell must not close the inspector");
+        assert.ok((lines.at(-2) ?? "").includes("Cleared echo done"), "the empty frame must still show the notice");
+
+        // An empty list must not make the keys throw or resurrect a job.
+        assert.doesNotThrow(() => {
+            press("j");
+            press("K");
+            press("J");
+            press(HOME);
+            press(END);
+            press("x");
+            press("c");
+        });
+        assert.equal(shellManager.getAllJobsList().length, 0);
+
+        press("\x1b"); // Esc
+        assert.equal(closeRequests, 1, "Esc must still close the empty inspector");
+    });
+
+    it("advertises the clear key in the footer", async () => {
+        await addSettledJob("job-1", "echo done", "done\n");
+
+        const footer = footerLine();
+
+        assert.ok(footer.includes("c to clear"), `the footer must show the clear key: ${footer}`);
+        assert.ok(footer.includes("x to kill"), `the footer must still show the kill key: ${footer}`);
         assert.ok(footer.includes("Esc to close"), `the footer must still show the close key: ${footer}`);
     });
 

@@ -83,9 +83,6 @@ export default function (pi: ExtensionAPI): void {
     pi.registerCommand("shell", {
         description: "Open the shell inspector",
         handler: async (_args, ctx) => {
-            if (shellManager.getAllJobsList().length === 0) {
-                return;
-            }
             if (ctx.mode !== "tui") {
                 return;
             }

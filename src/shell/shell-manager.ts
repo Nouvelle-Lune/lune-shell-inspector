@@ -83,8 +83,9 @@ export type ShellManagerEvent =
     | { type: "job-completed"; id: string }
     | { type: "job-failed"; id: string }
     | { type: "job-killed"; id: string }
+    | { type: "job-cleared"; id: string }
+    | { type: "output-updated"; id: string }
     | { type: "jobs-cleared" }
-    | { type: "output-updated"; id: string };
 
 export type ShellJobOutcome =
     | {
@@ -457,6 +458,38 @@ export class ShellManager {
             type: "job-killed",
             id: id
         });
+    }
+
+    clearJob(id: string): boolean {
+        const job = this.getJob(id);
+        if (!job) {
+            return false;
+        }
+
+        if (job.status === "running") {
+            return false;
+        }
+
+        switch (job.status) {
+            case "completed":
+                this.jobsStatusStat.completedCount--;
+                break;
+            case "failed":
+                this.jobsStatusStat.failedCount--;
+                break;
+            case "killed":
+                this.jobsStatusStat.killedCount--;
+                break;
+        }
+        this.jobs.delete(id);
+
+        job.terminal.dispose();
+
+        this.emit({
+            type: "job-cleared",
+            id: id
+        });
+        return true;
     }
 
     private clearManagerstatus() {

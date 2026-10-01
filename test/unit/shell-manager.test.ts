@@ -8,8 +8,10 @@
  * complete stream to a file), the screen every job exposes to readers
  * (`getScreenLines` returns the output after a headless terminal executed it), the outcome each settle accepts, the
  * idempotence of settling (a job that is unknown or already settled is refused without an event or
- * a counter change), the per-status counters, and the notification semantics (synchronous, once
- * per mutation, unsubscribe-able) including the isolation of a subscriber that throws.
+ * a counter change), the single-job clear (`clearJob` removes a settled job, moves only its own
+ * counter and refuses a running or unknown id), the per-status counters, and the notification
+ * semantics (synchronous, once per mutation, unsubscribe-able) including the isolation of a
+ * subscriber that throws.
  */
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
@@ -405,6 +407,182 @@ describe("ShellManager", () => {
             manager.clearAllJobs();
 
             assert.deepEqual(seen, [0]);
+        });
+    });
+
+    describe("clearJob", () => {
+        it("removes a settled job, drops its counter and notifies subscribers once", () => {
+            // Contract: the inspector's c key takes one settled job out of the list; the job is gone
+            // before observers run, so a dock render can never see the cleared shell.
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            manager.settleJob("job-a", completed(0));
+
+            const events: { type: string; id?: string }[] = [];
+            let jobsDuringNotification = -1;
+            manager.subscribe((event) => {
+                events.push(event);
+                jobsDuringNotification = manager.getAllJobsList().length;
+            });
+
+            assert.equal(manager.clearJob("job-a"), true);
+
+            assert.equal(manager.getJob("job-a")?.id, undefined);
+            assert.deepEqual(manager.getAllJobsList(), []);
+            assert.deepEqual(manager.getAllJobsStatusStat(), {
+                runningCount: 0,
+                completedCount: 0,
+                failedCount: 0,
+                killedCount: 0,
+            });
+            assert.deepEqual(
+                events,
+                [{ type: "job-cleared", id: "job-a" }],
+                "clearing must emit one event naming the cleared job",
+            );
+            assert.equal(jobsDuringNotification, 0, "the job must already be gone when listeners run");
+            assert.throws(() => manager.getJobOutput("job-a"), /Unknown shell job: job-a/);
+        });
+
+        it("clears a completed, failed or killed job and moves only that job's counter", () => {
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "running" });
+            startRunningJob(manager, { id: "completed" });
+            manager.settleJob("completed", completed(0));
+            startRunningJob(manager, { id: "failed" });
+            manager.settleJob("failed", failed("boom"));
+            startRunningJob(manager, { id: "killed" });
+            manager.settleJob("killed", killed("manual"));
+
+            assert.equal(manager.clearJob("failed"), true);
+            assert.deepEqual(manager.getAllJobsStatusStat(), {
+                runningCount: 1,
+                completedCount: 1,
+                failedCount: 0,
+                killedCount: 1,
+            });
+
+            assert.equal(manager.clearJob("completed"), true);
+            assert.deepEqual(manager.getAllJobsStatusStat(), {
+                runningCount: 1,
+                completedCount: 0,
+                failedCount: 0,
+                killedCount: 1,
+            });
+
+            assert.equal(manager.clearJob("killed"), true);
+            assert.deepEqual(manager.getAllJobsStatusStat(), {
+                runningCount: 1,
+                completedCount: 0,
+                failedCount: 0,
+                killedCount: 0,
+            });
+            assert.deepEqual(manager.getAllJobsList().map((job) => job.id), ["running"], "the running job must survive");
+        });
+
+        it("refuses a running job without aborting it or notifying subscribers", () => {
+            // Contract: only settled jobs can be cleared; the refusal must not disturb the live
+            // process or repaint a list that did not change.
+            const manager = new ShellManager();
+            const controller = startRunningJob(manager, { id: "job-a", command: "sleep 60" });
+            const seen: string[] = [];
+            manager.subscribe((event) => seen.push(event.type));
+
+            assert.equal(manager.clearJob("job-a"), false);
+
+            const job = manager.getJob("job-a");
+            assert.ok(job);
+            assert.equal(job.status, "running");
+            assert.equal(controller.signal.aborted, false, "a refused clear must not abort the process");
+            assert.deepEqual(seen, [], "a refused clear must not notify subscribers");
+            assert.deepEqual(manager.getAllJobsStatusStat(), {
+                runningCount: 1,
+                completedCount: 0,
+                failedCount: 0,
+                killedCount: 0,
+            });
+        });
+
+        it("refuses an unknown id without notifying subscribers", () => {
+            const manager = new ShellManager();
+            const seen: string[] = [];
+            manager.subscribe((event) => seen.push(event.type));
+
+            assert.equal(manager.clearJob("missing"), false);
+
+            assert.deepEqual(seen, []);
+            assert.deepEqual(manager.getAllJobsStatusStat(), {
+                runningCount: 0,
+                completedCount: 0,
+                failedCount: 0,
+                killedCount: 0,
+            });
+        });
+
+        it("is idempotent: a second clear of the same job is refused", () => {
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            manager.settleJob("job-a", completed(0));
+            startRunningJob(manager, { id: "job-b" });
+            manager.settleJob("job-b", completed(0));
+            const seen: string[] = [];
+            manager.subscribe((event) => seen.push(event.type));
+
+            assert.equal(manager.clearJob("job-a"), true);
+            assert.equal(manager.clearJob("job-a"), false);
+
+            assert.deepEqual(seen, ["job-cleared"], "the second clear must not emit again");
+            assert.equal(manager.getJob("job-b")?.status, "completed", "another settled job must survive");
+            assert.deepEqual(manager.getAllJobsStatusStat(), {
+                runningCount: 0,
+                completedCount: 1,
+                failedCount: 0,
+                killedCount: 0,
+            });
+        });
+
+        it("leaves the settled job it does not clear readable and unaborted", async () => {
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            const clearedController = manager.getJob("job-a")!.controller;
+            manager.settleJob("job-a", completed(0));
+            startRunningJob(manager, { id: "job-b" });
+            manager.appendOutput("job-b", "kept output\n");
+            manager.settleJob("job-b", failed("boom"));
+
+            manager.clearJob("job-a");
+
+            assert.equal(manager.getJob("job-a")?.id, undefined, "the targeted job must be gone");
+            assert.equal(clearedController.signal.aborted, false, "clearing a settled job must not abort anything");
+            assert.equal(manager.getJobOutput("job-b"), "kept output\n");
+            assert.deepEqual(await screenLines(manager, "job-b"), ["kept output"]);
+        });
+
+        it("clears the job and keeps later listeners running when an earlier listener throws", () => {
+            // Contract: observers cannot veto a mutation, exactly like every other manager change.
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            manager.settleJob("job-a", completed(0));
+            const seen: string[] = [];
+            manager.subscribe(() => {
+                throw new Error("observer boom");
+            });
+            manager.subscribe((event) => seen.push(event.type));
+
+            let cleared = false;
+            assert.doesNotThrow(() => {
+                cleared = manager.clearJob("job-a");
+            });
+
+            assert.equal(cleared, true);
+            assert.equal(manager.getJob("job-a")?.id, undefined);
+            assert.deepEqual(seen, ["job-cleared"]);
+            assert.deepEqual(manager.getAllJobsStatusStat(), {
+                runningCount: 0,
+                completedCount: 0,
+                failedCount: 0,
+                killedCount: 0,
+            });
         });
     });
 

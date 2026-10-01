@@ -34,6 +34,8 @@ const FRAME_HEIGHT = 6;
 const BODY_MIN_HEIGHT = 8;
 const BODY_MAX_HEIGHT = 18;
 
+const FOOTER_NOTICE_DURATION_MS = 1800;
+
 export async function openShellInspector(
     ctx: ExtensionContext,
 ): Promise<void> {
@@ -87,6 +89,10 @@ export class ShellInspector implements Component {
     /** Output rows the last render could show; key handling needs it to clamp the anchor. */
     private outputRows = 0;
 
+    /** Footer notice to display messages at the bottom of the inspector. */
+    private footerNotice: { text: string; color: ThemeColor } | undefined;
+    private footerNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+
     constructor(
         ctx: ExtensionContext,
         requestRender: () => void,
@@ -128,6 +134,33 @@ export class ShellInspector implements Component {
                 type: "killed",
                 error: "Shell killed by user"
             });
+            return;
+        }
+
+        if (data === "c") {
+            const chosenJob = jobs[this.selectedIndex];
+
+            if (!chosenJob) {
+                return;
+            }
+
+            const cleared = shellManager.clearJob(chosenJob.id);
+
+            if (cleared) {
+                this.outputAnchor = undefined;
+                this.showFooterNotice(
+                    `Cleared ${formatShellCommand(
+                        chosenJob.label ?? chosenJob.command,
+                        28,
+                    )}`,
+                    "success",
+                );
+            } else {
+                this.showFooterNotice(
+                    `Clear failed, only completed, failed, or killed`,
+                    "accent",
+                );
+            }
             return;
         }
 
@@ -184,16 +217,18 @@ export class ShellInspector implements Component {
     render(width: number): string[] {
         const jobs = shellManager.getAllJobsList();
 
-        if (jobs.length === 0) {
-            return [];
-        }
-
         this.syncRefreshTimer();
 
-        this.selectedIndex = Math.min(
-            this.selectedIndex,
-            jobs.length - 1,
-        );
+        if (jobs.length === 0) {
+            this.selectedIndex = 0;
+            this.outputAnchor = undefined;
+            this.outputRows = 0;
+        } else {
+            this.selectedIndex = Math.min(
+                this.selectedIndex,
+                jobs.length - 1,
+            );
+        }
 
         const bodyHeight = this.bodyHeight();
 
@@ -217,15 +252,41 @@ export class ShellInspector implements Component {
          * › ● npm test                    running
          *   ● npm example bash ...        running
          */
-        const left = this.renderJobs(jobs, leftWidth, bodyHeight);
+        const hasJobs = jobs.length > 0;
+
+        const left = hasJobs
+            ? this.renderJobs(
+                jobs,
+                leftWidth,
+                bodyHeight,
+            )
+            : this.fill(
+                [
+                    this.cell(
+                        this.theme.fg(
+                            "muted",
+                            "No background shell running",
+                        ),
+                        leftWidth,
+                    ),
+                ],
+                leftWidth,
+                bodyHeight,
+            );
         /**
-         * Render the right pane with the details of the selected job.
-         */
-        const right = this.renderDetails(
-            jobs[this.selectedIndex]!,
-            rightWidth,
-            bodyHeight,
-        );
+        * Render the right pane with the details of the selected job.
+        */
+        const right = hasJobs
+            ? this.renderDetails(
+                jobs[this.selectedIndex]!,
+                rightWidth,
+                bodyHeight,
+            )
+            : this.fill(
+                [],
+                rightWidth,
+                bodyHeight,
+            );
 
         const lines: string[] = [
             this.frame(`┌${"─".repeat(innerWidth)}┐`),
@@ -265,6 +326,11 @@ export class ShellInspector implements Component {
         if (this.refreshTimer) {
             clearInterval(this.refreshTimer);
             this.refreshTimer = undefined;
+        }
+
+        if (this.footerNoticeTimer) {
+            clearTimeout(this.footerNoticeTimer);
+            this.footerNoticeTimer = undefined;
         }
 
         this.unsubscribeJobs?.();
@@ -322,12 +388,42 @@ export class ShellInspector implements Component {
         return truncateToWidth(text, maxWidth, "…");
     }
 
+    /** Show a temporary notice in the footer with the specified text and color. */
+    private showFooterNotice(
+        text: string,
+        color: ThemeColor,
+    ): void {
+        this.footerNotice = { text, color };
+
+        if (this.footerNoticeTimer) {
+            clearTimeout(this.footerNoticeTimer);
+        }
+
+        this.footerNoticeTimer = setTimeout(() => {
+            this.footerNotice = undefined;
+            this.footerNoticeTimer = undefined;
+            this.requestRender();
+        }, FOOTER_NOTICE_DURATION_MS);
+
+        this.requestRender();
+    }
+
     /** Render the footer of the shell inspector. */
     private renderFooter(width: number): string {
+        if (this.footerNotice) {
+            return this.cell(
+                this.theme.fg(
+                    this.footerNotice.color,
+                    this.footerNotice.text,
+                ),
+                width,
+            );
+        }
+
         return this.cell(
             this.theme.fg(
                 "dim",
-                "↑↓/jk shell · ⇧↑↓/jk scroll · Home/End · x to kill · Esc to close",
+                "↑↓/jk shell · ⇧↑↓/jk scroll · Home/End · x to kill · c to clear · Esc to close",
             ),
             width,
         );
