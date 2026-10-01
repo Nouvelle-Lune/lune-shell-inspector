@@ -47,9 +47,10 @@ Run this command in the foreground because I need the result before continuing.
 - **Keeps foreground bash native.** Normal commands continue to use Pi's standard foreground behavior and transcript rendering.
 - **Runs independent work in the background.** Background shell jobs return immediately so the agent can continue with other work.
 - **Shows live shell status below the editor.** The dock summarizes running and settled jobs without taking over the transcript.
-- **Adds an interactive `/shell` inspector.** Browse jobs, inspect status and metadata, and follow or scroll their terminal output.
+- **Adds an interactive `/shell` inspector.** Browse jobs, inspect status and metadata, follow or scroll their terminal output, stop a running job, and clear settled ones from the list.
 - **Makes terminal output readable.** Progress bars, redraws, spinners, and other terminal-style output are rendered as a screen instead of raw escape sequences.
 - **Lets the agent inspect background jobs.** The `background_shell` tool can query job status and, when needed, current output.
+- **Lets the agent stop a job it no longer needs.** A running background shell can be cancelled on request, and it stays in the list with its output, so nothing has to be read before the job is stopped.
 - **Returns completion to the agent.** When a background job finishes, fails, or is killed, the result is delivered back to the agent so it can react without constant polling.
 - **Follows the Pi session.** Shell state is restored with the active session branch, and running jobs are stopped when their owning Pi session shuts down.
 
@@ -89,7 +90,11 @@ Keyboard controls:
 | Scroll output | `Shift+↑` / `Shift+↓` or `Shift+k` / `Shift+j` |
 | Jump to oldest output | `Home` |
 | Follow newest output | `End` |
+| Kill selected shell | `x` |
+| Clear selected shell | `c` |
 | Close inspector | `Esc` |
+
+Killing a running shell stops its process tree but keeps it in the list, with its output still readable. Clearing a completed, failed, or killed shell removes it from the list once you are done with it.
 
 Output follows the newest lines by default. Scrolling upward pauses that follow behavior so new output does not pull the viewport away from what you are reading.
 
@@ -107,6 +112,12 @@ The companion tool lets the agent:
 - query selected shell IDs;
 - inspect status without loading output;
 - request current output when it is actually needed.
+
+### `kill_background_shell`
+
+Cancels a running background shell when its work is no longer wanted: a dev server you are done with, a watcher left behind by a re-run, a test run that is clearly redundant. The agent stops the job it already knows about, so only that one shell goes away.
+
+Cancelling is not deleting. The shell stays in `/shell` with its output, so you can still read what it printed before it stopped.
 
 ## Development
 
