@@ -260,7 +260,7 @@ describe("lune-shell-inspector session persistence", () => {
             const done = driver.job("job-completed", "echo done");
             driver.settle(done.id, { type: "completed", exitCode: 0 });
             const live = driver.job("job-running", "sleep 30");
-            assert.equal(shellManager.getJob("job-running")!.status, "running");
+            assert.equal(shellManager.getJob("job-running")!.status, "running", "the job must be running before the shutdown");
 
             await driver.stop("quit");
 
@@ -273,6 +273,7 @@ describe("lune-shell-inspector session persistence", () => {
             assert.deepEqual(
                 snapshot.jobs.map((job) => [job.id, job.status]),
                 [["job-completed", "completed"], ["job-running", "killed"]],
+                "the persisted snapshot must record the completed job and the shutdown-killed one",
             );
 
             // A new pi process reopens the same session.
@@ -282,11 +283,12 @@ describe("lune-shell-inspector session persistence", () => {
             assert.deepEqual(
                 shellManager.getAllJobsList().map((job) => [job.id, job.status]),
                 [["job-completed", "completed"], ["job-running", "killed"]],
+                "the reopened session must restore every persisted job with its final status",
             );
-            assert.equal(shellManager.getJob("job-running")!.error, "pi session shutdown");
-            assert.equal(shellManager.getJob("job-running")!.output.content, "");
-            assert.equal(shellManager.getJob("job-completed")!.exitCode, 0);
-            assert.match(reopened.dockText() ?? "", /^2 shells · 1 completed · 1 killed · \/shell to open$/);
+            assert.equal(shellManager.getJob("job-running")!.error, "pi session shutdown", "the restored shell must keep the lifecycle kill reason");
+            assert.equal(shellManager.getJob("job-running")!.output.content, "", "a restored shell must be inert state with no output");
+            assert.equal(shellManager.getJob("job-completed")!.exitCode, 0, "a restored completed shell must keep its exit code");
+            assert.match(reopened.dockText() ?? "", /^2 shells · 1 completed · 1 killed · \/shell to open$/, "the restored shell list must be summarized in the dock");
 
             await reopened.stop("quit");
         });
@@ -306,15 +308,15 @@ describe("lune-shell-inspector session persistence", () => {
 
             await driver.start("reload");
 
-            assert.equal(shellManager.getJob("A")!.status, "killed");
-            assert.equal(shellManager.getJob("B")!.status, "completed");
+            assert.equal(shellManager.getJob("A")!.status, "killed", "the reload must restore A as killed");
+            assert.equal(shellManager.getJob("B")!.status, "completed", "the reload must restore B as completed");
             assert.deepEqual(shellManager.getAllJobsStatusStat(), {
                 runningCount: 0,
                 completedCount: 1,
                 failedCount: 0,
                 killedCount: 1,
-            });
-            assert.match(driver.dockText() ?? "", /^2 shells · 1 completed · 1 killed · \/shell to open$/);
+            }, "the restored counters must match the restored jobs");
+            assert.match(driver.dockText() ?? "", /^2 shells · 1 completed · 1 killed · \/shell to open$/, "the restored shell list must be summarized in the dock");
 
             await driver.stop("quit");
         });
@@ -369,8 +371,9 @@ describe("lune-shell-inspector session persistence", () => {
             assert.deepEqual(
                 shellManager.getAllJobsList().map((job) => [job.id, job.status]),
                 [["job-done", "completed"], ["job-live", "killed"]],
+                "a resumed session must rebuild its jobs from the stored snapshot alone",
             );
-            assert.match(resumed.dockText() ?? "", /^2 shells · 1 completed · 1 killed · \/shell to open$/);
+            assert.match(resumed.dockText() ?? "", /^2 shells · 1 completed · 1 killed · \/shell to open$/, "the resumed shell list must be summarized in the dock");
 
             await resumed.stop("quit");
         });
@@ -385,7 +388,7 @@ describe("lune-shell-inspector session persistence", () => {
 
             const driver = new LifecycleDriver(workDir, logA);
             await driver.start();
-            assert.equal(shellManager.getJob("A1")!.status, "completed");
+            assert.equal(shellManager.getJob("A1")!.status, "completed", "the first session must restore its own persisted job");
 
             await driver.stop("resume");
 
@@ -393,10 +396,10 @@ describe("lune-shell-inspector session persistence", () => {
             driver.sessionLog = logB;
             await driver.start("resume");
 
-            assert.deepEqual(shellManager.getAllJobsList().map((job) => job.id), ["B1"]);
+            assert.deepEqual(shellManager.getAllJobsList().map((job) => job.id), ["B1"], "the resumed session must list only its own job");
             assert.equal(shellManager.getJob("A1"), undefined, "A1 must not leak into the resumed session");
-            assert.equal(shellManager.getJob("B1")!.status, "failed");
-            assert.equal(shellManager.getJob("B1")!.error, "Command exited with code 1");
+            assert.equal(shellManager.getJob("B1")!.status, "failed", "the resumed job must keep its stored status");
+            assert.equal(shellManager.getJob("B1")!.error, "Command exited with code 1", "the resumed job must keep its stored reason");
 
             await driver.stop("quit");
         });
@@ -413,7 +416,7 @@ describe("lune-shell-inspector session persistence", () => {
             driver.settle(b.id, { type: "completed", exitCode: 0 });
 
             await driver.stop("new");
-            assert.equal(a.controller.signal.aborted, true);
+            assert.equal(a.controller.signal.aborted, true, "ending the old session must stop its shell");
 
             const persisted = oldLog.entry(shellEntries(oldLog).at(-1)!)!.data as ShellStatusSnapshot;
             assert.deepEqual(
@@ -432,7 +435,7 @@ describe("lune-shell-inspector session persistence", () => {
                 completedCount: 0,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "a new session must start with empty counters");
             assert.equal(driver.dockText(), undefined, "an empty session mounts no dock");
 
             await driver.stop("quit");
@@ -449,7 +452,7 @@ describe("lune-shell-inspector session persistence", () => {
             const b = original.job("B", "sleep 30");
 
             await original.stop("fork");
-            assert.equal(b.controller.signal.aborted, true);
+            assert.equal(b.controller.signal.aborted, true, "forking must stop the live shell before the new session starts");
 
             // `/fork` creates a new session file from the branch up to the current leaf.
             const fork = new LifecycleDriver(workDir, forkSessionLog(log, log.leafId));
@@ -458,6 +461,7 @@ describe("lune-shell-inspector session persistence", () => {
             assert.deepEqual(
                 shellManager.getAllJobsList().map((job) => [job.id, job.status]),
                 [["A", "completed"], ["B", "killed"]],
+                "the fork must inherit the branch's final shell state",
             );
 
             await fork.stop("quit");
@@ -491,8 +495,8 @@ describe("lune-shell-inspector session persistence", () => {
                 ["A1"],
                 "the fork must restore the snapshot on its own branch, not the original session's newest one",
             );
-            assert.equal(shellManager.getJob("A2"), undefined);
-            assert.deepEqual(jobIdsOf(forkLog, snapshot1Entry), ["A1"]);
+            assert.equal(shellManager.getJob("A2"), undefined, "the fork must not see a job outside its branch");
+            assert.deepEqual(jobIdsOf(forkLog, snapshot1Entry), ["A1"], "the fork's own snapshot must stay its source of truth");
             assert.deepEqual(shellEntries(forkLog), [snapshot1Entry], "the fork must hold exactly its branch's snapshot");
 
             await fork.stop("quit");
@@ -535,10 +539,10 @@ describe("lune-shell-inspector session persistence", () => {
             // ---- arrive on branch A: pi's `branch()` then `session_tree` (restore only) ----
             log.setLeaf(snapshotA);
             await manager.tree(snapshotA);
-            assert.deepEqual(shellManager.getAllJobsList().map((job) => job.id), ["A1", "A2"]);
+            assert.deepEqual(shellManager.getAllJobsList().map((job) => job.id), ["A1", "A2"], "arriving on A must restore A's jobs");
             assert.equal(shellManager.getJob("B1"), undefined, "B's job must not appear on A");
             assert.equal(shellManager.getJob("A2")!.status, "killed", "A's running shell was killed at A's teardown");
-            assert.equal(shellManager.getJob("A1")!.status, "completed");
+            assert.equal(shellManager.getJob("A1")!.status, "completed", "A's finished shell must keep its status");
 
             // ---- A -> B: B's state; A's teardown snapshot lands on A's own branch ----
             const beforeB = log.entries().length;
@@ -552,12 +556,12 @@ describe("lune-shell-inspector session persistence", () => {
             );
             assert.equal(shellManager.getJob("A1"), undefined, "A's completed job must not leak into B");
             assert.equal(shellManager.getJob("A2"), undefined, "A's live job must not leak into B");
-            assert.equal(shellManager.getJob("B1")!.status, "failed");
+            assert.equal(shellManager.getJob("B1")!.status, "failed", "B's job must keep its stored failure status");
 
             // Exactly one entry was appended - A's own teardown snapshot, under A's leaf.
             const addedLeavingA = log.entries().slice(beforeB);
             assert.equal(addedLeavingA.length, 1, "leaving A appends exactly one entry");
-            assert.equal(addedLeavingA[0]!.customType, SHELL_STATUS_ENTRY);
+            assert.equal(addedLeavingA[0]!.customType, SHELL_STATUS_ENTRY, "the appended entry must be a shell snapshot");
             assert.deepEqual(
                 jobIdsOf(log, addedLeavingA[0]!.id),
                 ["A1", "A2"],
@@ -565,7 +569,7 @@ describe("lune-shell-inspector session persistence", () => {
             );
             assert.ok(
                 log.getBranch(addedLeavingA[0]!.parentId ?? undefined).some((entry) => entry.id === snapshotA),
-                "the appended snapshot must hang off A's branch, not B's",
+                `the appended snapshot must hang off A's branch, not B's, got ${JSON.stringify(log.getBranch(addedLeavingA[0]!.parentId ?? undefined).map((entry) => entry.id))}`,
             );
 
             // B's active branch must hold B's own snapshot and nothing an A teardown added.
@@ -586,8 +590,8 @@ describe("lune-shell-inspector session persistence", () => {
                 ["A1", "A2"],
                 "returning to A must restore A's snapshot, not B's",
             );
-            assert.equal(shellManager.getJob("A2")!.status, "killed");
-            assert.equal(shellManager.getJob("A1")!.status, "completed");
+            assert.equal(shellManager.getJob("A2")!.status, "killed", "A's live shell must come back as killed");
+            assert.equal(shellManager.getJob("A1")!.status, "completed", "A's finished shell must keep its status");
             assert.equal(shellManager.getJob("B1"), undefined, "B's job must not appear on A");
 
             const addedLeavingB = log.entries().slice(entriesBeforeReturn);

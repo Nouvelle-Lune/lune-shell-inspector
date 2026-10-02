@@ -107,14 +107,14 @@ describe("shell dock next to pi-subagents widgets", () => {
             });
             await waitForJobSettled(jobId);
 
-            assert.match(dockText(session.ui) ?? "", /^1 shell completed in \d+s · \/shell to open$/);
+            assert.match(dockText(session.ui) ?? "", /^1 shell completed in \d+s · \/shell to open$/, "the settled job must show in the dock");
 
             assert.equal(
                 session.ui.mountedWidget("belowEditor", SUBAGENT_FLEET_KEY),
                 fleetWidget,
                 "the fleet widget must still be the exact object pi-subagents mounted",
             );
-            assert.equal(session.ui.mountedWidget("belowEditor", SUBAGENT_ASYNC_KEY), asyncWidget);
+            assert.equal(session.ui.mountedWidget("belowEditor", SUBAGENT_ASYNC_KEY), asyncWidget, "the async widget must survive the dock render");
             assert.deepEqual(
                 keysTouchedSince(session.ui, extensionCallBaseline),
                 new Set([SH_DOCK_KEY]),
@@ -144,18 +144,18 @@ describe("shell dock next to pi-subagents widgets", () => {
             });
             const settled = await waitForJobSettled(jobId);
 
-            assert.equal(settled.output.content, "line 1\nline 2\nline 3\nline 4\nline 5\n");
+            assert.equal(settled.output.content, "line 1\nline 2\nline 3\nline 4\nline 5\n", "the job must keep every streamed line");
             assert.ok(
                 session.ui.widgetCalls.length - extensionCallBaseline > 2,
-                "expected a re-render per appended chunk",
+                `expected more than 2 re-renders after streaming, got ${session.ui.widgetCalls.length - extensionCallBaseline}`,
             );
             assert.equal(
                 session.ui.mountedWidget("belowEditor", SUBAGENT_FLEET_KEY),
                 fleetWidget,
                 "no shell update may replace the fleet widget",
             );
-            assert.deepEqual(keysTouchedSince(session.ui, extensionCallBaseline), new Set([SH_DOCK_KEY]));
-            assert.match(dockText(session.ui) ?? "", /^1 shell completed in \d+s · \/shell to open$/);
+            assert.deepEqual(keysTouchedSince(session.ui, extensionCallBaseline), new Set([SH_DOCK_KEY]), "every re-render must target the dock key only");
+            assert.match(dockText(session.ui) ?? "", /^1 shell completed in \d+s · \/shell to open$/, "the dock must end on the completed summary");
         } finally {
             await session.host.emit("session_shutdown", session.ctx);
             removeTempWorkDir(workDir);
@@ -176,7 +176,7 @@ describe("shell dock next to pi-subagents widgets", () => {
             const content = session.ui.mountedWidget("belowEditor", SH_DOCK_KEY);
             assert.ok(Array.isArray(content), "the dock must be mounted as an array of lines");
             assert.equal(content.length, 1, "the dock must render exactly one line");
-            assert.match(content[0] ?? "", /^12 shells · 12 running · \/shell to open$/);
+            assert.match(content[0] ?? "", /^12 shells · 12 running · \/shell to open$/, "the summary must count every tracked shell");
         } finally {
             await session.host.emit("session_shutdown", session.ctx);
             removeTempWorkDir(workDir);
@@ -195,7 +195,7 @@ describe("shell dock next to pi-subagents widgets", () => {
             session.ui.setWidget(SUBAGENT_FLEET_KEY, fleetWidget, { placement: "belowEditor" });
 
             startJob("job-1", "sleep 30", workDir);
-            assert.deepEqual(session.ui.mountedKeys("belowEditor"), [SUBAGENT_FLEET_KEY, SH_DOCK_KEY]);
+            assert.deepEqual(session.ui.mountedKeys("belowEditor"), [SUBAGENT_FLEET_KEY, SH_DOCK_KEY], "the dock mount must follow the fleet widget");
 
             session.ui.setWidget(SUBAGENT_FLEET_KEY, fleetWidget, { placement: "belowEditor" });
             assert.deepEqual(session.ui.mountedKeys("belowEditor"), [SH_DOCK_KEY, SUBAGENT_FLEET_KEY], "the fleet refresh moved it after the dock");
@@ -206,7 +206,7 @@ describe("shell dock next to pi-subagents widgets", () => {
                 [SUBAGENT_FLEET_KEY, SH_DOCK_KEY],
                 "the dock render must move the shell line back to the end",
             );
-            assert.equal(session.ui.mountedWidget("belowEditor", SUBAGENT_FLEET_KEY), fleetWidget);
+            assert.equal(session.ui.mountedWidget("belowEditor", SUBAGENT_FLEET_KEY), fleetWidget, "the ordering rule must not disturb the fleet widget");
         } finally {
             await session.host.emit("session_shutdown", session.ctx);
             removeTempWorkDir(workDir);
@@ -223,16 +223,16 @@ describe("shell dock next to pi-subagents widgets", () => {
             session.ui.setWidget(SUBAGENT_FLEET_KEY, fleetWidget, { placement: "belowEditor" });
 
             startJob("job-1", "sleep 30", workDir);
-            assert.ok(dockLine(session.ui));
+            assert.ok(dockLine(session.ui), "the dock must be mounted while a job exists");
 
             shellManager.clearAllJobs();
 
             assert.equal(dockLine(session.ui), undefined, "the dock must be gone");
-            assert.equal(session.ui.mountedWidget("belowEditor", SUBAGENT_FLEET_KEY), fleetWidget);
+            assert.equal(session.ui.mountedWidget("belowEditor", SUBAGENT_FLEET_KEY), fleetWidget, "clearing the shells must not remove the fleet widget");
 
             shellDock.render();
             assert.equal(dockLine(session.ui), undefined, "rendering an empty job list must keep the dock cleared");
-            assert.equal(session.ui.mountedWidget("belowEditor", SUBAGENT_FLEET_KEY), fleetWidget);
+            assert.equal(session.ui.mountedWidget("belowEditor", SUBAGENT_FLEET_KEY), fleetWidget, "an empty render must not remove the fleet widget");
         } finally {
             await session.host.emit("session_shutdown", session.ctx);
             removeTempWorkDir(workDir);
@@ -246,14 +246,14 @@ describe("shell dock next to pi-subagents widgets", () => {
             const fleetWidget = subagentWidget("subagent fleet · 1 running");
             session.ui.setWidget(SUBAGENT_FLEET_KEY, fleetWidget, { placement: "belowEditor" });
             startJob("job-1", "sleep 30", workDir);
-            assert.ok(dockLine(session.ui));
+            assert.ok(dockLine(session.ui), "the dock must be mounted before shutdown");
             const extensionCallBaseline = session.ui.widgetCalls.length;
 
             await session.host.emit("session_shutdown", session.ctx);
 
-            assert.equal(dockLine(session.ui), undefined);
-            assert.equal(session.ui.mountedWidget("belowEditor", SUBAGENT_FLEET_KEY), fleetWidget);
-            assert.deepEqual(keysTouchedSince(session.ui, extensionCallBaseline), new Set([SH_DOCK_KEY]));
+            assert.equal(dockLine(session.ui), undefined, "shutdown must clear the dock");
+            assert.equal(session.ui.mountedWidget("belowEditor", SUBAGENT_FLEET_KEY), fleetWidget, "shutdown must not remove the fleet widget");
+            assert.deepEqual(keysTouchedSince(session.ui, extensionCallBaseline), new Set([SH_DOCK_KEY]), "shutdown must touch the dock key only");
         } finally {
             removeTempWorkDir(workDir);
         }
@@ -272,7 +272,7 @@ describe("shell dock next to pi-subagents widgets", () => {
         shellDock.clear();
 
         assert.deepEqual(ui.widgetCalls.map((call) => call.key), [SUBAGENT_FLEET_KEY], "only the test's own mount may be recorded");
-        assert.equal(ui.mountedWidget("belowEditor", SUBAGENT_FLEET_KEY), fleetWidget);
+        assert.equal(ui.mountedWidget("belowEditor", SUBAGENT_FLEET_KEY), fleetWidget, "a UI-less session must leave every widget alone");
     });
 
     it("survives a subagent widget being mounted while the command runs", async () => {
@@ -291,6 +291,7 @@ describe("shell dock next to pi-subagents widgets", () => {
             assert.match(
                 stripTerminalSequences(dockText(session.ui) ?? ""),
                 /^1 running shell · for n in 1 2 3 4; d… · \d+s · \/shell to open$/,
+                "the running dock must show the truncated command",
             );
 
             const fleetWidget = subagentWidget("subagent fleet · 1 running");
@@ -299,9 +300,9 @@ describe("shell dock next to pi-subagents widgets", () => {
 
             await waitForJobSettled(jobId);
 
-            assert.equal(session.ui.mountedWidget("belowEditor", SUBAGENT_FLEET_KEY), fleetWidget);
-            assert.match(dockText(session.ui) ?? "", /^1 shell completed in \d+s · \/shell to open$/);
-            assert.deepEqual(keysTouchedSince(session.ui, extensionCallBaseline), new Set([SH_DOCK_KEY]));
+            assert.equal(session.ui.mountedWidget("belowEditor", SUBAGENT_FLEET_KEY), fleetWidget, "the mid-command mount must survive the settle");
+            assert.match(dockText(session.ui) ?? "", /^1 shell completed in \d+s · \/shell to open$/, "the dock must switch to the completed summary");
+            assert.deepEqual(keysTouchedSince(session.ui, extensionCallBaseline), new Set([SH_DOCK_KEY]), "the settle must re-render the dock key only");
         } finally {
             await session.host.emit("session_shutdown", session.ctx);
             removeTempWorkDir(workDir);

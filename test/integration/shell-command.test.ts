@@ -75,7 +75,7 @@ describe("/shell command", () => {
         try {
             const lines = overlay.render(WIDTH);
 
-            assert.ok(lines.length > 0, "the empty inspector must still draw a frame");
+            assert.ok(lines.length > 0, `the empty inspector must still draw a frame, got ${lines.length} lines`);
             assert.ok(lines[0]!.includes("┌"), `expected a top border: ${JSON.stringify(lines)}`);
             assert.ok(lines.at(-1)!.includes("└"), `expected a bottom border: ${JSON.stringify(lines)}`);
             assert.ok(

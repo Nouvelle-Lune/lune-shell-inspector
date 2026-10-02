@@ -106,8 +106,8 @@ describe("ShellManager persistence", () => {
             assert.equal(controllers.running.signal.aborted, true, "teardown must abort the live process tree");
             const snapshot = calls[0]!.data as ShellStatusSnapshot;
             const byId = new Map(snapshot.jobs.map((job) => [job.id, job]));
-            assert.equal(byId.get("running")!.status, "killed");
-            assert.equal(byId.get("running")!.error, "pi session shutdown");
+            assert.equal(byId.get("running")!.status, "killed", "a live job must be persisted as killed");
+            assert.equal(byId.get("running")!.error, "pi session shutdown", "the persisted job must carry the teardown reason");
             assert.deepEqual(
                 snapshot.stats,
                 { runningCount: 0, completedCount: 1, failedCount: 1, killedCount: 2 },
@@ -127,11 +127,11 @@ describe("ShellManager persistence", () => {
 
             const snapshot = calls[0]!.data as ShellStatusSnapshot;
             const byId = new Map(snapshot.jobs.map((job) => [job.id, job]));
-            assert.equal(byId.get("completed")!.status, "completed");
-            assert.equal(byId.get("completed")!.exitCode, 7);
-            assert.equal(byId.get("failed")!.status, "failed");
-            assert.equal(byId.get("failed")!.error, "boom");
-            assert.equal(byId.get("failed")!.exitCode, 2);
+            assert.equal(byId.get("completed")!.status, "completed", "a completed job must stay completed");
+            assert.equal(byId.get("completed")!.exitCode, 7, "a completed job must keep its exit code");
+            assert.equal(byId.get("failed")!.status, "failed", "a failed job must stay failed");
+            assert.equal(byId.get("failed")!.error, "boom", "a failed job must keep its reason");
+            assert.equal(byId.get("failed")!.exitCode, 2, "a failed job must keep its exit code");
         });
 
         it("writes one full snapshot carrying the job fields restore needs", () => {
@@ -148,32 +148,32 @@ describe("ShellManager persistence", () => {
             manager.clearAllJobs(pi);
 
             assert.equal(calls.length, 1, "a clear must write exactly one snapshot");
-            assert.equal(calls[0]!.customType, SHELL_STATUS_ENTRY);
+            assert.equal(calls[0]!.customType, SHELL_STATUS_ENTRY, "the snapshot must use the shell-view entry type");
             const snapshot = calls[0]!.data as ShellStatusSnapshot;
             assert.deepEqual(snapshot.stats, {
                 runningCount: 0,
                 completedCount: 1,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "the snapshot must carry the counters as they were written");
 
             const saved = snapshot.jobs[0]!;
-            assert.equal(saved.id, "job-a");
-            assert.equal(saved.label, "nightly tests");
-            assert.equal(saved.command, "npm test");
-            assert.equal(saved.cwd, "/work/app");
-            assert.equal(saved.status, "completed");
-            assert.equal(saved.startedAt, job.startedAt);
-            assert.equal(saved.finishedAt, job.finishedAt);
-            assert.equal(saved.lastActivityAt, job.lastActivityAt);
-            assert.equal(saved.exitCode, 0);
+            assert.equal(saved.id, "job-a", "the job id must survive the round trip");
+            assert.equal(saved.label, "nightly tests", "the label must survive the round trip");
+            assert.equal(saved.command, "npm test", "the command must survive the round trip");
+            assert.equal(saved.cwd, "/work/app", "the cwd must survive the round trip");
+            assert.equal(saved.status, "completed", "the status must survive the round trip");
+            assert.equal(saved.startedAt, job.startedAt, "the start timestamp must survive the round trip");
+            assert.equal(saved.finishedAt, job.finishedAt, "the finish timestamp must survive the round trip");
+            assert.equal(saved.lastActivityAt, job.lastActivityAt, "the last activity must survive the round trip");
+            assert.equal(saved.exitCode, 0, "the exit code must survive the round trip");
             assert.deepEqual(saved.output, {
                 content: "suite 1 ok\n",
                 truncated: false,
                 totalLines: 1,
                 totalBytes: Buffer.byteLength("suite 1 ok\n"),
                 fullOutputPath: undefined,
-            });
+            }, "the snapshot must carry the output fields restore needs");
             for (const key of ["terminal", "controller"]) {
                 assert.equal(key in saved, false, `the snapshot must not carry ${key}`);
             }
@@ -194,11 +194,11 @@ describe("ShellManager persistence", () => {
                 manager.clearAllJobs(pi);
 
                 const saved = (calls[0]!.data as ShellStatusSnapshot).jobs[0]!;
-                assert.equal(saved.output.truncated, true);
-                assert.equal(saved.output.content, spilled.output.content);
-                assert.equal(saved.output.fullOutputPath, spillPath);
-                assert.equal(saved.output.totalLines, spilled.output.totalLines);
-                assert.equal(saved.output.totalBytes, spilled.output.totalBytes);
+                assert.equal(saved.output.truncated, true, "the spilled flag must survive the round trip");
+                assert.equal(saved.output.content, spilled.output.content, "the retained tail must survive the round trip");
+                assert.equal(saved.output.fullOutputPath, spillPath, "the spill path must survive the round trip");
+                assert.equal(saved.output.totalLines, spilled.output.totalLines, "the complete line count must survive the round trip");
+                assert.equal(saved.output.totalBytes, spilled.output.totalBytes, "the complete byte count must survive the round trip");
             } finally {
                 rmSync(spillPath, { force: true });
             }
@@ -211,13 +211,13 @@ describe("ShellManager persistence", () => {
             manager.clearAllJobs(pi);
 
             assert.equal(calls.length, 1, "the snapshot must be written before the jobs are dropped");
-            assert.deepEqual(manager.getAllJobsList(), []);
+            assert.deepEqual(manager.getAllJobsList(), [], "the clear must drop every job");
             assert.deepEqual(manager.getAllJobsStatusStat(), {
                 runningCount: 0,
                 completedCount: 0,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "the clear must reset every counter");
         });
 
         it("disposes the terminals of the jobs it drops", async () => {
@@ -227,7 +227,7 @@ describe("ShellManager persistence", () => {
             startRunningJob(manager, { id: "job-a" });
             manager.appendOutput("job-a", "old screen\n");
             const terminal = manager.getJob("job-a")!.terminal;
-            assert.deepEqual(await screenLines(manager, "job-a"), ["old screen"]);
+            assert.deepEqual(await screenLines(manager, "job-a"), ["old screen"], "the screen must be readable before the clear");
 
             manager.clearAllJobs();
 
@@ -237,7 +237,7 @@ describe("ShellManager persistence", () => {
             const buffer = terminal.buffer.active;
             const line = buffer.getLine(0);
             assert.equal(line?.translateToString(true), "old screen", "the disposed screen must not accept late writes");
-            assert.deepEqual(manager.getAllJobsList(), []);
+            assert.deepEqual(manager.getAllJobsList(), [], "the cleared jobs must stay gone");
         });
 
         it("settles a job that was already killed during the clear exactly once", () => {
@@ -249,8 +249,8 @@ describe("ShellManager persistence", () => {
 
             manager.clearAllJobs(pi);
 
-            assert.equal(manager.settleJob("job-a", killed("aborted")), false);
-            assert.equal(manager.settleJob("job-a", completed(0)), false);
+            assert.equal(manager.settleJob("job-a", killed("aborted")), false, "a settle after the clear must be refused");
+            assert.equal(manager.settleJob("job-a", completed(0)), false, "any later settle must be refused too");
         });
 
         it("still clears without a pi session and writes nothing", () => {
@@ -261,8 +261,8 @@ describe("ShellManager persistence", () => {
 
             manager.clearAllJobs();
 
-            assert.equal(controller.signal.aborted, true);
-            assert.deepEqual(manager.getAllJobsList(), []);
+            assert.equal(controller.signal.aborted, true, "a pi-less clear must still stop the process");
+            assert.deepEqual(manager.getAllJobsList(), [], "a pi-less clear must drop the jobs");
         });
 
         it("appends successive snapshots in order, so the newest branch state wins", () => {
@@ -277,9 +277,9 @@ describe("ShellManager persistence", () => {
             appendShellStatus(manager, log);
 
             const entries = log.entries().filter((entry) => entry.customType === SHELL_STATUS_ENTRY);
-            assert.equal(entries.length, 2);
+            assert.equal(entries.length, 2, "each teardown must append its own snapshot");
             const newest = entries[1]!.data as ShellStatusSnapshot;
-            assert.deepEqual(newest.jobs.map((job) => job.id), ["second"]);
+            assert.deepEqual(newest.jobs.map((job) => job.id), ["second"], "restore must pick the newest snapshot on the branch");
         });
 
         it("emits exactly one cleared event per call", () => {
@@ -312,7 +312,7 @@ describe("ShellManager persistence", () => {
 
             manager.restoreShellManager(contextFor(log));
 
-            assert.deepEqual(manager.getAllJobsList().map((job) => job.id), ["newer-job"]);
+            assert.deepEqual(manager.getAllJobsList().map((job) => job.id), ["newer-job"], "only the newest snapshot may restore");
         });
 
         it("rebuilds every job field from the snapshot", () => {
@@ -347,20 +347,20 @@ describe("ShellManager persistence", () => {
             manager.restoreShellManager(contextFor(log));
 
             const job = manager.getJob("job-a")!;
-            assert.equal(job.label, "nightly tests");
-            assert.equal(job.command, "npm test");
-            assert.equal(job.cwd, "/work/app");
-            assert.equal(job.status, "failed");
-            assert.equal(job.startedAt, frozenAt);
-            assert.equal(job.finishedAt, frozenAt + 5000);
-            assert.equal(job.lastActivityAt, frozenAt + 5000);
-            assert.equal(job.exitCode, 3);
-            assert.equal(job.error, "Command exited with code 3");
-            assert.equal(job.output.content, "suite 1 ok\nsuite 2 failed\n");
-            assert.equal(job.output.truncated, false);
-            assert.equal(job.output.totalLines, 2);
-            assert.equal(job.output.totalBytes, Buffer.byteLength("suite 1 ok\nsuite 2 failed\n"));
-            assert.equal(job.output.fullOutputPath, undefined);
+            assert.equal(job.label, "nightly tests", "the label must be rebuilt from the snapshot");
+            assert.equal(job.command, "npm test", "the command must be rebuilt from the snapshot");
+            assert.equal(job.cwd, "/work/app", "the cwd must be rebuilt from the snapshot");
+            assert.equal(job.status, "failed", "the status must be rebuilt from the snapshot");
+            assert.equal(job.startedAt, frozenAt, "the start timestamp must be rebuilt from the snapshot");
+            assert.equal(job.finishedAt, frozenAt + 5000, "the finish timestamp must be rebuilt from the snapshot");
+            assert.equal(job.lastActivityAt, frozenAt + 5000, "the last activity must be rebuilt from the snapshot");
+            assert.equal(job.exitCode, 3, "the exit code must be rebuilt from the snapshot");
+            assert.equal(job.error, "Command exited with code 3", "the reason must be rebuilt from the snapshot");
+            assert.equal(job.output.content, "suite 1 ok\nsuite 2 failed\n", "the retained output must be rebuilt from the snapshot");
+            assert.equal(job.output.truncated, false, "the truncation flag must be rebuilt from the snapshot");
+            assert.equal(job.output.totalLines, 2, "the line total must be rebuilt from the snapshot");
+            assert.equal(job.output.totalBytes, Buffer.byteLength("suite 1 ok\nsuite 2 failed\n"), "the byte total must be rebuilt from the snapshot");
+            assert.equal(job.output.fullOutputPath, undefined, "a truncated-free snapshot must not restore a spill path");
         });
 
         it("restores the stats exactly as the snapshot recorded them", () => {
@@ -382,7 +382,7 @@ describe("ShellManager persistence", () => {
                 completedCount: 41,
                 failedCount: 0,
                 killedCount: 2,
-            });
+            }, "restore must keep the snapshot's counters as recorded");
         });
 
         it("keeps a persisted job's output readable and its spill path intact", () => {
@@ -402,10 +402,10 @@ describe("ShellManager persistence", () => {
             manager.restoreShellManager(contextFor(log));
 
             const restored = manager.getJob("spilled")!;
-            assert.equal(restored.output.content, output);
-            assert.equal(restored.output.truncated, true);
-            assert.equal(restored.output.fullOutputPath, path);
-            assert.ok(manager.getJobOutput("spilled").startsWith(`[Output truncated. Full output: ${path}]\n`));
+            assert.equal(restored.output.content, output, "the retained tail must be restored verbatim");
+            assert.equal(restored.output.truncated, true, "the restored job must stay truncated");
+            assert.equal(restored.output.fullOutputPath, path, "the restored job must keep its spill path");
+            assert.ok(manager.getJobOutput("spilled").startsWith(`[Output truncated. Full output: ${path}]\n`), `the read path must keep pointing at the spill file, got ${JSON.stringify(manager.getJobOutput("spilled").slice(0, 200))}`);
         });
 
         it("restores a truncated job's full-output metadata without spilling again", () => {
@@ -435,11 +435,11 @@ describe("ShellManager persistence", () => {
             const restored = manager.getJob("spilled")!;
 
             try {
-                assert.equal(restored.output.truncated, true);
-                assert.equal(restored.output.totalLines, expected.totalLines);
-                assert.equal(restored.output.totalBytes, expected.totalBytes);
-                assert.equal(restored.output.fullOutputPath, expected.fullOutputPath);
-                assert.equal(restored.output.content, expected.content);
+                assert.equal(restored.output.truncated, true, "the truncation flag must survive restore");
+                assert.equal(restored.output.totalLines, expected.totalLines, "the complete line count must survive restore");
+                assert.equal(restored.output.totalBytes, expected.totalBytes, "the complete byte count must survive restore");
+                assert.equal(restored.output.fullOutputPath, expected.fullOutputPath, "the spill path must survive restore");
+                assert.equal(restored.output.content, expected.content, "the retained tail must survive restore");
                 assert.equal(
                     readFileSync(expected.fullOutputPath!, "utf8"),
                     full,
@@ -470,7 +470,7 @@ describe("ShellManager persistence", () => {
 
             const restored = manager.getJob("job-a")!;
             assert.notEqual(restored.terminal, originalTerminal, "the emulator belongs to the old session");
-            assert.deepEqual(await screenLines(manager, "job-a"), ["hello", "world"]);
+            assert.deepEqual(await screenLines(manager, "job-a"), ["hello", "world"], "the restored screen must replay the persisted output");
         });
 
         it("rebuilds a restored job's screen deterministically from the retained output", async () => {
@@ -491,7 +491,7 @@ describe("ShellManager persistence", () => {
                 "progress 100%",
                 "done",
                 "blue end",
-            ]);
+            ], "guard: the writer's screen must be the executed stream");
             const retained = writer.getJob("vt-job")!.output.content;
             appendShellStatus(writer, log);
 
@@ -505,7 +505,7 @@ describe("ShellManager persistence", () => {
             const replayed = await screenLines(replay, "replay");
 
             assert.deepEqual(restored, replayed, "restore must equal a fresh replay of the retained text");
-            assert.deepEqual(restored, ["plain line", "progress 100%", "done", "blue end"]);
+            assert.deepEqual(restored, ["plain line", "progress 100%", "done", "blue end"], "the restored screen must match the executed stream");
         });
 
         it("rebuilds only the retained tail, never screen history the bounded tail already dropped", async () => {
@@ -518,7 +518,7 @@ describe("ShellManager persistence", () => {
             const total = 6000;
             writer.appendOutput("history-job", Array.from({ length: total }, (_, index) => `L${index}`).join("\n"));
             const retained = writer.getJob("history-job")!.output.content;
-            assert.ok(retained.includes("L4000"), "guard: the retained tail must have dropped the head");
+            assert.ok(retained.includes("L4000"), `guard: the retained tail must have dropped the head, kept ${retained.split("\n").length} lines`);
             const originalScreen = await screenLines(writer, "history-job");
 
             appendShellStatus(writer, log);
@@ -533,7 +533,7 @@ describe("ShellManager persistence", () => {
 
             assert.deepEqual(restoredScreen, replayedScreen, "the restored screen must be the replay of the retained text");
             assert.notDeepEqual(restoredScreen, originalScreen, "the dropped screen history must not be reconstructed");
-            assert.ok(!restoredScreen.includes("L0"), "the dropped head must not reappear");
+            assert.ok(!restoredScreen.includes("L0"), `the dropped head must not reappear, got ${restoredScreen.length} screen lines`);
         });
 
         it("gives every restored job a new, un-aborted controller", () => {
@@ -543,15 +543,15 @@ describe("ShellManager persistence", () => {
             const writer = new ShellManager();
             const original = startRunningJob(writer, { id: "job-a" });
             const snapshot = appendShellStatus(writer, log);
-            assert.equal(snapshot.jobs[0]!.status, "killed");
+            assert.equal(snapshot.jobs[0]!.status, "killed", "a live job captured by a snapshot must be recorded as killed");
 
             const manager = new ShellManager();
             manager.restoreShellManager(contextFor(log));
 
             const controller = manager.getJob("job-a")!.controller;
-            assert.ok(controller instanceof AbortController);
-            assert.notEqual(controller, original);
-            assert.equal(controller.signal.aborted, false);
+            assert.ok(controller instanceof AbortController, `a restored job needs a usable controller, got ${String(controller)}`);
+            assert.notEqual(controller, original, "a restored job must not reuse the original controller");
+            assert.equal(controller.signal.aborted, false, "a restored controller must start un-aborted");
             assert.equal(original.signal.aborted, true, "the persisted job was killed when it was dropped");
         });
 
@@ -568,14 +568,14 @@ describe("ShellManager persistence", () => {
             const manager = new ShellManager();
             manager.restoreShellManager(contextFor(log));
 
-            assert.deepEqual(manager.getAllJobsList().map((job) => job.id), ["a", "b", "c"]);
+            assert.deepEqual(manager.getAllJobsList().map((job) => job.id), ["a", "b", "c"], "restore must rebuild every job in order");
             // The third job was still running when the session recorded the snapshot, which kills it.
             assert.deepEqual(manager.getAllJobsStatusStat(), {
                 runningCount: 0,
                 completedCount: 1,
                 failedCount: 1,
                 killedCount: 1,
-            });
+            }, "restore must keep each job's recorded status");
         });
 
         it("leaves the manager empty when the branch has no snapshot", () => {
@@ -587,13 +587,13 @@ describe("ShellManager persistence", () => {
 
             manager.restoreShellManager(context);
 
-            assert.deepEqual(manager.getAllJobsList(), []);
+            assert.deepEqual(manager.getAllJobsList(), [], "a branch without a snapshot must restore no jobs");
             assert.deepEqual(manager.getAllJobsStatusStat(), {
                 runningCount: 0,
                 completedCount: 0,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "a branch without a snapshot must leave the counters empty");
         });
 
         it("does not disturb a manager that already holds jobs", () => {
@@ -606,7 +606,7 @@ describe("ShellManager persistence", () => {
 
             manager.restoreShellManager(contextFor(log));
 
-            assert.deepEqual(manager.getAllJobsList().map((job) => job.id), ["live"]);
+            assert.deepEqual(manager.getAllJobsList().map((job) => job.id), ["live"], "restore must not disturb an existing manager state");
         });
 
         it("reads only the active branch, never a sibling branch", () => {
@@ -648,8 +648,8 @@ describe("ShellManager persistence", () => {
             const second = new ShellManager();
             log.setLeaf(leafB);
             second.restoreShellManager(contextFor(log));
-            assert.deepEqual(second.getAllJobsList().map((job) => job.id), ["B1"]);
-            assert.equal(second.getJob("A2"), undefined);
+            assert.deepEqual(second.getAllJobsList().map((job) => job.id), ["B1"], "branch B must restore B's snapshot only");
+            assert.equal(second.getJob("A2"), undefined, "branch B must not inherit branch A's jobs");
         });
 
         it("is idempotent for the same branch", () => {
@@ -666,13 +666,13 @@ describe("ShellManager persistence", () => {
             manager.restoreShellManager(context);
             manager.restoreShellManager(context);
 
-            assert.deepEqual(manager.getAllJobsList().map((job) => job.id), ["job-a"]);
+            assert.deepEqual(manager.getAllJobsList().map((job) => job.id), ["job-a"], "restoring twice must not duplicate the job");
             assert.deepEqual(manager.getAllJobsStatusStat(), {
                 runningCount: 0,
                 completedCount: 1,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "restoring twice must not double-count the job");
         });
 
         it("takes the stats of the snapshot it restored, not of the older one", () => {
@@ -696,7 +696,7 @@ describe("ShellManager persistence", () => {
                 completedCount: 1,
                 failedCount: 0,
                 killedCount: 1,
-            });
+            }, "restore must take the counters of the snapshot it restored");
         });
 
         it("clears then restores the way session_start does", () => {
@@ -713,8 +713,8 @@ describe("ShellManager persistence", () => {
             manager.clearAllJobs();
             manager.restoreShellManager(contextFor(log));
 
-            assert.deepEqual(manager.getAllJobsList().map((job) => job.id), ["persisted"]);
-            assert.equal(manager.getJob("stale-module-state"), undefined);
+            assert.deepEqual(manager.getAllJobsList().map((job) => job.id), ["persisted"], "clear then restore must land on the snapshot's jobs");
+            assert.equal(manager.getJob("stale-module-state"), undefined, "the pre-clear module state must stay gone");
         });
     });
 
@@ -725,16 +725,16 @@ describe("ShellManager persistence", () => {
             const manager = new ShellManager();
             startRunningJob(manager, { id: "job-a" });
 
-            assert.equal(manager.settleJob("job-a", completed(0)), true);
+            assert.equal(manager.settleJob("job-a", completed(0)), true, "the first settle must be accepted");
             manager.clearAllJobs();
 
-            assert.equal(manager.settleJob("job-a", killed("pi session shutdown")), false);
+            assert.equal(manager.settleJob("job-a", killed("pi session shutdown")), false, "a settle after the clear must be refused");
             assert.deepEqual(manager.getAllJobsStatusStat(), {
                 runningCount: 0,
                 completedCount: 0,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "a refused settle must not move a counter");
         });
 
         it("settles a job once per turn even when the caller settles twice", () => {
@@ -743,17 +743,17 @@ describe("ShellManager persistence", () => {
             const manager = new ShellManager();
             startRunningJob(manager, { id: "job-a" });
 
-            assert.equal(manager.settleJob("job-a", completed(0)), true);
+            assert.equal(manager.settleJob("job-a", completed(0)), true, "the first settle must be accepted");
             const settledAt = manager.getJob("job-a")!.finishedAt;
-            assert.equal(manager.settleJob("job-a", killed("late")), false);
+            assert.equal(manager.settleJob("job-a", killed("late")), false, "the second settle must be refused");
 
-            assert.equal(manager.getJob("job-a")!.finishedAt, settledAt);
+            assert.equal(manager.getJob("job-a")!.finishedAt, settledAt, "a refused settle must not restamp the finish");
             assert.deepEqual(manager.getAllJobsStatusStat(), {
                 runningCount: 0,
                 completedCount: 1,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "a repeated settle must not double-count");
         });
 
         it("refuses output once the job is gone and counts nothing twice across many jobs", () => {
@@ -768,16 +768,16 @@ describe("ShellManager persistence", () => {
             manager.clearAllJobs();
 
             for (const id of ids) {
-                assert.equal(manager.settleJob(id, killed("aborted")), false);
-                assert.equal(manager.settleJob(id, completed(0)), false);
-                assert.throws(() => manager.appendOutput(id, "late\n"), /Unknown shell job/);
+                assert.equal(manager.settleJob(id, killed("aborted")), false, `a settle for the cleared ${id} must be refused`);
+                assert.equal(manager.settleJob(id, completed(0)), false, `a later settle for ${id} must be refused too`);
+                assert.throws(() => manager.appendOutput(id, "late\n"), /Unknown shell job/, `output for the cleared ${id} must be refused`);
             }
             assert.deepEqual(manager.getAllJobsStatusStat(), {
                 runningCount: 0,
                 completedCount: 0,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "the bulk teardown must leave no counter behind");
         });
 
         it("is safe to clear repeatedly while nothing is running", () => {
@@ -794,7 +794,7 @@ describe("ShellManager persistence", () => {
                 completedCount: 0,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "clearing repeatedly must stay empty");
         });
     });
 });

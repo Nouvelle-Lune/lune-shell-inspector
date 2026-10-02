@@ -27,7 +27,7 @@ import { Container } from "@earendil-works/pi-tui";
 
 import Type from "typebox";
 
-import { startBackgroundShell } from "./background-bash.ts";
+import { startBackgroundShell, backgroundStartOutputSchema } from "./background-bash.ts";
 
 import { shellManager, type ShellJob } from "../shell/shell-manager.ts";
 /**
@@ -50,10 +50,7 @@ export function BashTool() {
     const parameters = Type.Object({
         ...baseBash.parameters.properties,
         mode: Type.Optional(
-            Type.Union([
-                Type.Literal("foreground"),
-                Type.Literal("background"),
-            ], {
+            Type.Union([Type.Literal("foreground"), Type.Literal("background")], {
                 description:
                     `"foreground" waits for completion. ` +
                     `"background" returns immediately while the command continues running independently.`,
@@ -62,14 +59,20 @@ export function BashTool() {
         ),
         label: Type.Optional(
             Type.String({
-                description: "A short human-readable label for a background command, shown in the /shell inspector; ignored in foreground mode.",
-            })),
+                description:
+                    "A short human-readable label for a background command, shown in the /shell inspector; ignored in foreground mode.",
+            }),
+        ),
     });
 
     return defineTool({
         ...baseBash,
         description,
         parameters,
+
+        outputSchema: baseBash.outputSchema
+            ? Type.Union([baseBash.outputSchema, backgroundStartOutputSchema])
+            : undefined,
 
         promptSnippet:
             "Run shell commands in foreground or background; background commands keep running independently and remain observable.",
@@ -94,7 +97,12 @@ export function BashTool() {
             if ((context.args.mode ?? "foreground") === "background") {
                 return new Container();
             }
-            return baseBash.renderResult!(result as Parameters<NonNullable<typeof baseBash.renderResult>>[0], options, theme, context);
+            return baseBash.renderResult!(
+                result as Parameters<NonNullable<typeof baseBash.renderResult>>[0],
+                options,
+                theme,
+                context,
+            );
         },
 
         async execute(toolCallId, params, signal, onUpdate, ctx) {
@@ -121,7 +129,6 @@ export function BashTool() {
                 timeout: params.timeout,
                 ctx,
             });
-
         },
     });
 }
@@ -257,12 +264,10 @@ export function KillBackgroundShellTool() {
     return defineTool({
         name: "kill_background_shell",
         label: "Kill Background Shell",
-        description:
-            "Stop one managed background shell and abort its process tree.",
+        description: "Stop one managed background shell and abort its process tree.",
         parameters: killBackgroundShellSchema,
 
-        promptSnippet:
-            "Stop a managed background shell started by bash mode=background.",
+        promptSnippet: "Stop a managed background shell started by bash mode=background.",
         promptGuidelines: [
             "Kill a background shell only when its running work is no longer wanted, not merely because no other useful work remains.",
             "Identify the shell by the job ID reported by bash mode=background or background_shell; the job ID is the only handle, and a killed shell stays inspectable until it is cleared.",
@@ -295,4 +300,3 @@ export function KillBackgroundShellTool() {
         },
     });
 }
-

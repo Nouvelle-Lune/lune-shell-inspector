@@ -50,8 +50,8 @@ describe("lune-shell-inspector bash delegation", () => {
         const reference = await runBashCommand(createBuiltInBash(workDir), { command, ctx: null });
 
         assert.equal(reference.failed, false, `the reference call must succeed: ${reference.error?.message ?? ""}`);
-        assert.deepEqual(delegated.result, reference.result);
-        assert.equal(resultText(requireResult(delegated)), "alpha\nbeta\n");
+        assert.deepEqual(delegated.result, reference.result, "the delegated result must equal a direct built-in call");
+        assert.equal(resultText(requireResult(delegated)), "alpha\nbeta\n", "the result body must be the command's output");
         assert.equal(requireResult(delegated).details, undefined, "an untruncated result carries no details");
     });
 
@@ -67,8 +67,8 @@ describe("lune-shell-inspector bash delegation", () => {
         });
         const reference = await runBashCommand(createBuiltInBash(workDir), { command, ctx: null });
 
-        assert.deepEqual(explicit.result, reference.result);
-        assert.equal(resultText(requireResult(explicit)), "explicit\n");
+        assert.deepEqual(explicit.result, reference.result, "the explicit foreground mode must behave like the omitted one");
+        assert.equal(resultText(requireResult(explicit)), "explicit\n", "the result body must stay the built-in output");
     });
 
     it("runs the command in ctx.cwd", async () => {
@@ -82,14 +82,14 @@ describe("lune-shell-inspector bash delegation", () => {
                 ctx: createFakeContext(otherDir),
                 toolCallId: "call-cwd-context",
             });
-            assert.equal(resultText(requireResult(inContext)).trim(), realpathSync(otherDir));
+            assert.equal(resultText(requireResult(inContext)).trim(), realpathSync(otherDir), "the command must run in ctx.cwd");
 
             const inWorkDir = await runBashCommand(session.tool, {
                 command: "pwd -P",
                 ctx: session.ctx,
                 toolCallId: "call-cwd-session",
             });
-            assert.equal(resultText(requireResult(inWorkDir)).trim(), realpathSync(workDir));
+            assert.equal(resultText(requireResult(inWorkDir)).trim(), realpathSync(workDir), "the session context cwd must win over the load-time directory");
         } finally {
             removeTempWorkDir(otherDir);
         }
@@ -106,7 +106,7 @@ describe("lune-shell-inspector bash delegation", () => {
         });
         const error = requireError(run);
 
-        assert.equal(error.message, "Command timed out after 1 seconds");
+        assert.equal(error.message, "Command timed out after 1 seconds", "the built-in timeout message must pass through unchanged");
         assert.ok(run.durationMs < 4000, `the timeout must cut the 5s sleep short, took ${run.durationMs}ms`);
     });
 
@@ -119,7 +119,7 @@ describe("lune-shell-inspector bash delegation", () => {
             toolCallId: "call-timeout-idle",
         });
 
-        assert.equal(resultText(requireResult(run)), "ok\n");
+        assert.equal(resultText(requireResult(run)), "ok\n", "an unreached timeout must not change the result");
     });
 
     it("forwards the abort signal so a cancelled call fails as aborted", async () => {
@@ -136,7 +136,7 @@ describe("lune-shell-inspector bash delegation", () => {
             });
             const error = requireError(run);
 
-            assert.equal(error.message, "Command aborted");
+            assert.equal(error.message, "Command aborted", "the built-in abort message must pass through unchanged");
             assert.ok(run.durationMs < 4000, `the abort must cut the 5s sleep short, took ${run.durationMs}ms`);
         } finally {
             clearTimeout(abortTimer);
@@ -153,7 +153,7 @@ describe("lune-shell-inspector bash delegation", () => {
         });
 
         assert.equal(run.failed, false, `expected the call to succeed: ${run.error?.message ?? ""}`);
-        assert.ok(run.updates.length > 0, "expected at least one streamed snapshot");
+        assert.ok(run.updates.length > 0, `expected at least one streamed snapshot, got ${run.updates.length}`);
 
         let previous = "";
         for (const update of run.updates) {
@@ -163,12 +163,12 @@ describe("lune-shell-inspector bash delegation", () => {
         }
 
         const lastSnapshot = run.updates.at(-1);
-        assert.ok(lastSnapshot, "expected a last snapshot");
+        assert.ok(lastSnapshot, `expected a last snapshot, got ${run.updates.length} snapshots`);
         assert.ok(
             resultText(requireResult(run)).startsWith(resultText(lastSnapshot)),
-            "the reported text must extend the last streamed snapshot",
+            `the reported text must extend the last streamed snapshot, got ${JSON.stringify(resultText(requireResult(run)).slice(0, 200))} vs snapshot ${JSON.stringify(resultText(lastSnapshot).slice(0, 200))}`,
         );
-        assert.equal(resultText(requireResult(run)), "one\ntwo\nthree\n");
+        assert.equal(resultText(requireResult(run)), "one\ntwo\nthree\n", "the final result must carry every streamed chunk");
     });
 
     it("records nothing: a foreground call creates no shell job and never touches the dock", async () => {

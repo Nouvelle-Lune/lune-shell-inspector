@@ -153,7 +153,7 @@ describe("shell dock", () => {
 
       dock.render();
 
-      assert.deepEqual(ui.widgetCalls, []);
+      assert.deepEqual(ui.widgetCalls, [], "a dock without a context must not touch the widget registry");
     });
 
     it("does nothing without an interactive UI", () => {
@@ -164,7 +164,7 @@ describe("shell dock", () => {
       dock.render();
       dock.clear();
 
-      assert.deepEqual(ui.widgetCalls, []);
+      assert.deepEqual(ui.widgetCalls, [], "a UI-less dock must not touch the widget registry");
     });
 
     it("removes the widget when there is no job", () => {
@@ -173,8 +173,8 @@ describe("shell dock", () => {
 
       assert.deepEqual(ui.widgetCalls, [
         { key: WIDGET_KEY, content: undefined, placement: undefined },
-      ]);
-      assert.equal(ui.mountedWidget("belowEditor", WIDGET_KEY), undefined);
+      ], "an empty job list must clear the dock key");
+      assert.equal(ui.mountedWidget("belowEditor", WIDGET_KEY), undefined, "nothing may stay mounted for an empty list");
     });
 
     it("mounts the single running shell below the editor", () => {
@@ -189,9 +189,9 @@ describe("shell dock", () => {
         key: WIDGET_KEY,
         content: ["1 running shell · sleep 30 · 0s · /shell to open"],
         placement: "belowEditor",
-      });
-      assert.equal(line(), "1 running shell · sleep 30 · 0s · /shell to open");
-      assert.deepEqual(ui.mountedKeys("belowEditor"), [WIDGET_KEY]);
+      }, "the running shell must be mounted below the editor under the dock key");
+      assert.equal(line(), "1 running shell · sleep 30 · 0s · /shell to open", "the dock line must carry command, elapsed time and hint");
+      assert.deepEqual(ui.mountedKeys("belowEditor"), [WIDGET_KEY], "the dock must be the only below-editor widget");
       assert.deepEqual(
         ui.mountedKeys("aboveEditor"),
         [],
@@ -205,7 +205,7 @@ describe("shell dock", () => {
 
       render();
 
-      assert.equal(line(), "1 running shell · sleep 30 · 12s · /shell to open");
+      assert.equal(line(), "1 running shell · sleep 30 · 12s · /shell to open", "the elapsed segment must report whole seconds");
     });
 
     it("truncates the command of the single running shell to the 20-column budget", () => {
@@ -224,7 +224,7 @@ describe("shell dock", () => {
       );
       assert.ok(
         segment.endsWith(ELLIPSIS),
-        "an over-budget command must be marked as truncated",
+        `an over-budget command must be marked as truncated, got ${JSON.stringify(segment)}`,
       );
       assert.notEqual(segment, command, "the command must actually be shortened");
     });
@@ -240,6 +240,7 @@ describe("shell dock", () => {
       assert.equal(
         line(),
         `1 running shell · ${command} · 0s · /shell to open`,
+        "a command that exactly fits the budget must stay unchanged",
       );
     });
 
@@ -267,9 +268,9 @@ describe("shell dock", () => {
       );
       assert.ok(
         segment.endsWith(ELLIPSIS),
-        "an over-budget command must be marked as truncated",
+        `an over-budget command must be marked as truncated, got ${JSON.stringify(segment)}`,
       );
-      assert.equal(hasLoneSurrogate(segment), false);
+      assert.equal(hasLoneSurrogate(segment), false, "the truncated CJK command must stay well-formed");
     });
 
     it("truncates an emoji command without splitting a surrogate pair", () => {
@@ -293,7 +294,7 @@ describe("shell dock", () => {
       );
       assert.ok(
         segment.endsWith(ELLIPSIS),
-        "an over-budget command must be marked as truncated",
+        `an over-budget command must be marked as truncated, got ${JSON.stringify(segment)}`,
       );
     });
 
@@ -307,7 +308,7 @@ describe("shell dock", () => {
       render();
 
       const segment = stripTerminalSequences(commandSegment(line()));
-      assert.equal(hasLoneSurrogate(segment), false);
+      assert.equal(hasLoneSurrogate(segment), false, "the truncated emoji command must stay well-formed");
       assert.ok(
         visibleWidth(segment) <= COMMAND_COLUMN_BUDGET,
         `the command must fit ${COMMAND_COLUMN_BUDGET} columns: ${JSON.stringify(segment)}`,
@@ -359,12 +360,12 @@ describe("shell dock", () => {
 
       render();
 
-      assert.equal(line(), "1 shell completed in 4s · /shell to open");
-      assert.equal(ui.widgetCalls.at(-1)?.placement, "belowEditor");
+      assert.equal(line(), "1 shell completed in 4s · /shell to open", "the completed shell must report its runtime");
+      assert.equal(ui.widgetCalls.at(-1)?.placement, "belowEditor", "the completed summary must stay below the editor");
       assert.deepEqual(ui.fgCalls, [
         { color: "success", text: "1 shell completed" },
         { color: "dim", text: " · /shell to open" },
-      ]);
+      ], "the completed count must be green and the hint dim");
     });
 
     it("falls back to the count list when the running shell shares the list with settled shells", () => {
@@ -380,6 +381,7 @@ describe("shell dock", () => {
       assert.equal(
         line(),
         "3 shells · 1 running · 2 completed · /shell to open",
+        "a mixed list must use the count summary",
       );
       assert.equal(
         line().includes("sleep 30"),
@@ -405,6 +407,7 @@ describe("shell dock", () => {
       assert.equal(
         line(),
         "5 shells · 1 running · 1 completed · 1 failed · 2 killed · /shell to open",
+        "the count list must follow running, completed, failed, killed order",
       );
     });
 
@@ -417,6 +420,7 @@ describe("shell dock", () => {
       assert.equal(
         line(),
         "2 shells · 1 completed · 1 failed · /shell to open",
+        "a settled-only list must omit the running segment",
       );
     });
 
@@ -425,7 +429,7 @@ describe("shell dock", () => {
 
       render();
 
-      assert.equal(line(), "1 shell · 1 failed · /shell to open");
+      assert.equal(line(), "1 shell · 1 failed · /shell to open", "a single failed shell must use the count list");
     });
 
     it("uses the count list for a single killed shell and marks it as an error", () => {
@@ -435,12 +439,12 @@ describe("shell dock", () => {
 
       render();
 
-      assert.equal(line(), "1 shell · 1 killed · /shell to open");
+      assert.equal(line(), "1 shell · 1 killed · /shell to open", "a single killed shell must use the count list");
       assert.ok(
         ui.fgCalls.some(
           (call) => call.color === "error" && call.text === "1 killed",
         ),
-        "the killed segment must be drawn in the error colour",
+        `the killed segment must be drawn in the error colour, got ${JSON.stringify(ui.fgCalls)}`,
       );
     });
 
@@ -458,30 +462,34 @@ describe("shell dock", () => {
         ui.fgCalls.some(
           (call) => call.color === "accent" && call.text === "1 running",
         ),
+        `the running segment must be accented, got ${JSON.stringify(ui.fgCalls)}`,
       );
       assert.ok(
         ui.fgCalls.some(
           (call) => call.color === "success" && call.text === "1 completed",
         ),
+        `the completed segment must be green, got ${JSON.stringify(ui.fgCalls)}`,
       );
       assert.ok(
         ui.fgCalls.some(
           (call) => call.color === "error" && call.text === "1 failed",
         ),
+        `the failed segment must be red, got ${JSON.stringify(ui.fgCalls)}`,
       );
       assert.ok(
         ui.fgCalls.some(
           (call) => call.color === "error" && call.text === "1 killed",
         ),
+        `the killed segment must be red, got ${JSON.stringify(ui.fgCalls)}`,
       );
       assert.ok(
         ui.fgCalls.some((call) => call.color === "dim" && call.text === " · "),
-        "the count segments must be joined with a dim separator",
+        `the count segments must be joined with a dim separator, got ${JSON.stringify(ui.fgCalls)}`,
       );
       assert.deepEqual(ui.fgCalls.at(-1), {
         color: "dim",
         text: " · /shell to open",
-      });
+      }, "the count list must end with the dim hint");
     });
 
     it("re-mounts the same key with updated content on every render", () => {
@@ -490,7 +498,7 @@ describe("shell dock", () => {
       addJob("job-1", "sleep 30", "running");
       addJob("job-2", "sleep 60", "running");
       render();
-      assert.equal(line(), "2 shells · 2 running · /shell to open");
+      assert.equal(line(), "2 shells · 2 running · /shell to open", "two running shells must use the count summary");
 
       shellManager.settleJob("job-2", { type: "completed", exitCode: 0 });
       render();
@@ -498,8 +506,9 @@ describe("shell dock", () => {
       assert.equal(
         line(),
         "2 shells · 1 running · 1 completed · /shell to open",
+        "the re-render must reflect the settled shell",
       );
-      assert.deepEqual(ui.mountedKeys("belowEditor"), [WIDGET_KEY]);
+      assert.deepEqual(ui.mountedKeys("belowEditor"), [WIDGET_KEY], "the re-render must not stack widget keys");
     });
 
     it("keeps the command and elapsed seconds of the single running shell uncoloured", () => {
@@ -514,7 +523,7 @@ describe("shell dock", () => {
         { color: "accent", text: "1 running shell" },
         { color: "dim", text: " · " },
         { color: "dim", text: " · /shell to open" },
-      ]);
+      ], "only the running count may be accented; command and elapsed time stay plain");
     });
 
     it("refreshes the elapsed seconds every second and stops once nothing runs", () => {
@@ -528,18 +537,21 @@ describe("shell dock", () => {
         assert.equal(
           line(),
           "1 running shell · sleep 30 · 0s · /shell to open",
+          "the elapsed segment must start at zero seconds",
         );
 
         mock.timers.tick(1_000);
         assert.equal(
           line(),
           "1 running shell · sleep 30 · 1s · /shell to open",
+          "the interval must advance the elapsed segment by one second",
         );
 
         mock.timers.tick(3_000);
         assert.equal(
           line(),
           "1 running shell · sleep 30 · 4s · /shell to open",
+          "the elapsed segment must follow every tick",
         );
 
         shellManager.settleJob("job-1", { type: "completed", exitCode: 0 });
@@ -566,13 +578,13 @@ describe("shell dock", () => {
 
       dock.clear();
 
-      assert.equal(ui.mountedWidget("belowEditor", WIDGET_KEY), undefined);
+      assert.equal(ui.mountedWidget("belowEditor", WIDGET_KEY), undefined, "clearing must unmount the dock key");
       assert.deepEqual(ui.widgetCalls.at(-1), {
         key: WIDGET_KEY,
         content: undefined,
         placement: undefined,
-      });
-      assert.equal(dock.isSelected(), false);
+      }, "the clear must be a setWidget(undefined) for the dock key");
+      assert.equal(dock.isSelected(), false, "clearing the dock must drop the selection");
     });
 
     it("does nothing without an interactive UI", () => {
@@ -581,7 +593,7 @@ describe("shell dock", () => {
 
       dock.clear();
 
-      assert.deepEqual(ui.widgetCalls, []);
+      assert.deepEqual(ui.widgetCalls, [], "a UI-less clear must not touch the widget registry");
     });
   });
 });

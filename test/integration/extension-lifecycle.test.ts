@@ -96,7 +96,7 @@ describe("lune-shell-inspector session lifecycle", () => {
             await withSession("start-empty", async (session) => {
                 assert.deepEqual(shellManager.getAllJobsList(), [], "starting a session must drop stale jobs");
                 assert.equal(stale.signal.aborted, true, "starting a session must stop leftover processes");
-                assert.equal(dockLine(session.ui), undefined);
+                assert.equal(dockLine(session.ui), undefined, "no dock may stay mounted while there is no job");
                 assert.deepEqual(session.ui.widgetCalls.at(-1)?.content, undefined, "the dock must be cleared");
             });
         });
@@ -108,17 +108,17 @@ describe("lune-shell-inspector session lifecycle", () => {
                 assert.equal(dockCalls(session.ui), 1, "session_start renders once");
 
                 startJob("job-1", "sleep 30", "/tmp");
-                assert.match(dockText(session.ui) ?? "", /^1 running shell · sleep 30 · \d+s · \/shell to open$/);
+                assert.match(dockText(session.ui) ?? "", /^1 running shell · sleep 30 · \d+s · \/shell to open$/, "a running job must be shown with its command and elapsed time");
 
                 shellManager.appendOutput("job-1", "chunk\n");
-                assert.match(dockText(session.ui) ?? "", /^1 running shell · sleep 30 · \d+s · \/shell to open$/);
+                assert.match(dockText(session.ui) ?? "", /^1 running shell · sleep 30 · \d+s · \/shell to open$/, "appended output must not change the running summary");
 
                 shellManager.settleJob("job-1", { type: "completed", exitCode: 3 });
-                assert.match(dockText(session.ui) ?? "", /^1 shell completed in \d+s · \/shell to open$/);
+                assert.match(dockText(session.ui) ?? "", /^1 shell completed in \d+s · \/shell to open$/, "the settled job must turn the dock into the completed summary");
 
                 startJob("job-2", "sleep 60", "/tmp");
                 shellManager.settleJob("job-2", { type: "killed", error: "timeout:1" });
-                assert.equal(dockText(session.ui), "2 shells · 1 completed · 1 killed · /shell to open");
+                assert.equal(dockText(session.ui), "2 shells · 1 completed · 1 killed · /shell to open", "two settled jobs must be summarized per status");
 
                 assert.equal(dockCalls(session.ui), 6, "expected one render per mutation and for session_start");
             });
@@ -141,7 +141,7 @@ describe("lune-shell-inspector session lifecycle", () => {
 
                 assert.equal(dockCalls(first.ui), firstCallsAfterShutdown, "the ended session must not render again");
                 assert.equal(dockCalls(second.ui), secondCallsAfterStart + 1, "the new session must render");
-                assert.match(dockText(second.ui) ?? "", /^1 running shell · sleep 30 · \d+s · \/shell to open$/);
+                assert.match(dockText(second.ui) ?? "", /^1 running shell · sleep 30 · \d+s · \/shell to open$/, "the new session must render the shared manager's job");
             } finally {
                 await second.host.emit("session_shutdown", second.ctx);
                 removeTempWorkDir(firstDir);
@@ -156,7 +156,7 @@ describe("lune-shell-inspector session lifecycle", () => {
             const session = await openSession(workDir);
             try {
                 const running = startJob("job-1", "sleep 30", workDir);
-                assert.match(dockText(session.ui) ?? "", /^1 running shell · sleep 30 · \d+s · \/shell to open$/);
+                assert.match(dockText(session.ui) ?? "", /^1 running shell · sleep 30 · \d+s · \/shell to open$/, "the job must appear in the dock before shutdown");
 
                 await session.host.emit("session_shutdown", session.ctx);
 
@@ -197,12 +197,12 @@ describe("lune-shell-inspector session lifecycle", () => {
                     toolCallId: "call-dock",
                 });
 
-                assert.match(dockText(session.ui) ?? "", /^1 running shell · sleep 1; echo hi · \d+s · \/shell to open$/);
+                assert.match(dockText(session.ui) ?? "", /^1 running shell · sleep 1; echo hi · \d+s · \/shell to open$/, "a background call must show the running job in the dock");
 
                 const settled = await waitForJobSettled(jobId);
 
-                assert.equal(settled.output.content, "hi\n");
-                assert.match(dockText(session.ui) ?? "", /^1 shell completed in \d+s · \/shell to open$/);
+                assert.equal(settled.output.content, "hi\n", "the job must keep the output the command produced");
+                assert.match(dockText(session.ui) ?? "", /^1 shell completed in \d+s · \/shell to open$/, "the settled dock must switch to the completed summary");
             });
         });
 
@@ -219,12 +219,12 @@ describe("lune-shell-inspector session lifecycle", () => {
 
                 const settled = await waitForJobSettled(jobId);
 
-                assert.equal(settled.output.content, "one\ntwo\nthree\n");
+                assert.equal(settled.output.content, "one\ntwo\nthree\n", "the job must keep every streamed chunk in order");
                 assert.ok(
                     dockCalls(session.ui) > callsAfterStart,
-                    "expected the streamed chunks to re-render the dock",
+                    `expected > ${callsAfterStart} dock renders after streaming, got ${dockCalls(session.ui)}`,
                 );
-                assert.match(dockText(session.ui) ?? "", /^1 shell completed in \d+s · \/shell to open$/);
+                assert.match(dockText(session.ui) ?? "", /^1 shell completed in \d+s · \/shell to open$/, "the settled dock must switch to the completed summary");
             });
         });
     });

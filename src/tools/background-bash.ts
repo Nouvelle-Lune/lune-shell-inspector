@@ -1,3 +1,5 @@
+import Type from "typebox";
+
 import {
     createLocalBashOperations,
     type AgentToolResult,
@@ -5,6 +7,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { shellManager } from "../shell/shell-manager.ts";
+
+export const backgroundStartOutputSchema = Type.Object({
+    background: Type.Literal(true),
+    shell_job_id: Type.String(),
+    command: Type.String(),
+});
 
 // pi's own local execution backend, so a background shell behaves like a built-in bash call
 // (shell config, process-tree kill on abort/timeout) without pi's output sanitizing.
@@ -44,12 +52,11 @@ export function startBackgroundShell(input: {
 
             onData(data) {
                 // prevent appending output after the shutdown kills the job
-                if (shellManager.getJob(toolCallId)?.status !== "running") { return; }
+                if (shellManager.getJob(toolCallId)?.status !== "running") {
+                    return;
+                }
                 // Retention (bounded tail plus the full-output file) is enforced by appendOutput.
-                shellManager.appendOutput(
-                    toolCallId,
-                    data.toString("utf8"),
-                );
+                shellManager.appendOutput(toolCallId, data.toString("utf8"));
             },
         })
         .then(({ exitCode }) => {
@@ -90,13 +97,17 @@ export function startBackgroundShell(input: {
         content: [
             {
                 type: "text" as const,
-                text:
-                    `Background shell started with ID ${toolCallId}: ${command}`,
+                text: `Background shell started with ID ${toolCallId}: ${command}`,
             },
         ],
         details: {
             shellJobId: toolCallId,
             background: true,
+        },
+        structuredContent: {
+            background: true,
+            shell_job_id: toolCallId,
+            command,
         },
     };
 }

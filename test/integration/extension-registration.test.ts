@@ -103,13 +103,13 @@ describe("lune-shell-inspector registration", () => {
         );
 
         const registeredTool = registered.find((entry) => entry.name === "bash");
-        assert.ok(registeredTool, "expected the bash wrapper");
+        assert.ok(registeredTool, `expected the bash wrapper, got ${registered.map((entry) => entry.name).join(", ") || "no registered tools"}`);
         const builtIn = createBuiltInBash(workDir);
 
-        assert.equal(registeredTool.label, "bash");
+        assert.equal(registeredTool.label, "bash", "the wrapper must keep the built-in label");
         assert.ok(
             (registeredTool.description ?? "").startsWith(builtIn.description ?? ""),
-            "the description must extend the built-in one",
+            `the description must extend the built-in one, got ${JSON.stringify(registeredTool.description ?? "")}`,
         );
         assert.match(
             registeredTool.description ?? "",
@@ -132,11 +132,11 @@ describe("lune-shell-inspector registration", () => {
         const guidelines = registeredTool.promptGuidelines ?? [];
         assert.ok(
             guidelines.some((line) => /background/i.test(line)),
-            "the wrapper's prompt guidelines must cover background mode",
+            `the wrapper's prompt guidelines must cover background mode, got ${JSON.stringify(guidelines)}`,
         );
         assert.ok(
             guidelines.some((line) => /foreground/i.test(line)),
-            "the wrapper's prompt guidelines must cover foreground mode",
+            `the wrapper's prompt guidelines must cover foreground mode, got ${JSON.stringify(guidelines)}`,
         );
 
         assert.deepEqual(
@@ -144,6 +144,10 @@ describe("lune-shell-inspector registration", () => {
             builtIn.constrainedSampling,
             "constrained sampling must come from the built-in tool",
         );
+
+        // pi 1.0 reports a declared tool result to codemode through outputSchema; without one a
+        // script receives the model-facing text instead of the structured result fields.
+        assert.ok(registeredTool.outputSchema, `the bash wrapper must declare an output schema, got ${String(registeredTool.outputSchema)}`);
     });
 
     it("registers background_shell with the jobs schema and its own prompt metadata", () => {
@@ -154,7 +158,7 @@ describe("lune-shell-inspector registration", () => {
 
         assert.equal(Value.Check(schema, {}), true, "omitting jobs must list every shell");
         assert.equal(Value.Check(schema, { jobs: [] }), true, "an empty jobs array must list every shell");
-        assert.equal(Value.Check(schema, { jobs: [{ jobID: "call-1" }] }), true);
+        assert.equal(Value.Check(schema, { jobs: [{ jobID: "call-1" }] }), true, "a jobs entry with just a jobID must be accepted");
         assert.equal(
             Value.Check(schema, { jobs: [{ jobID: "call-1", includeOutput: true }] }),
             true,
@@ -168,11 +172,11 @@ describe("lune-shell-inspector registration", () => {
         assert.equal(Value.Check(schema, { jobs: [{}] }), false, "an entry without jobID must be rejected");
         assert.equal(Value.Check(schema, { jobs: "call-1" }), false, "jobs must be an array");
 
-        assert.match(tool.description, /background shells/i);
+        assert.match(tool.description, /background shells/i, "the tool description must say what it inspects");
         assert.match(tool.promptSnippet ?? "", /background shells/i, "the tool must be advertised in the system prompt");
         assert.ok(
             (tool.promptGuidelines ?? []).some((line) => /intermediate output/i.test(line)),
-            "the guidelines must explain when to pull intermediate output",
+            `the guidelines must explain when to pull intermediate output, got ${JSON.stringify(tool.promptGuidelines ?? [])}`,
         );
     });
 
@@ -184,8 +188,8 @@ describe("lune-shell-inspector registration", () => {
         const killTool = loadRegisteredTool(workDir, "kill_background_shell");
         const schema = killTool.parameters as TSchema;
 
-        assert.equal(killTool.name, "kill_background_shell");
-        assert.equal(Value.Check(schema, { jobID: "call-123" }), true);
+        assert.equal(killTool.name, "kill_background_shell", "the tool must keep its registration name");
+        assert.equal(Value.Check(schema, { jobID: "call-123" }), true, "a single managed job id must be accepted");
         assert.equal(Value.Check(schema, {}), false, "a missing jobID must be rejected");
         assert.equal(Value.Check(schema, { jobID: 123 }), false, "a non-string jobID must be rejected");
         assert.equal(Value.Check(schema, { jobID: ["call-123"] }), false, "an array of ids must not be accepted");
@@ -233,7 +237,7 @@ describe("lune-shell-inspector registration", () => {
                 builtInResultRow.render(RENDER_WIDTH),
                 `mode ${JSON.stringify(args.mode)} must keep the built-in result row`,
             );
-            assert.match(plainText(resultRow.render(RENDER_WIDTH)), /hello/);
+            assert.match(plainText(resultRow.render(RENDER_WIDTH)), /hello/, "the built-in result row must show the command output");
         }
     });
 
@@ -268,6 +272,7 @@ describe("lune-shell-inspector registration", () => {
         assert.notDeepEqual(
             builtIn.renderCall!(args, theme, createRenderContext(args, workDir)).render(RENDER_WIDTH),
             [],
+            "guard: the built-in renderer must draw a row for the same background arguments",
         );
     });
 

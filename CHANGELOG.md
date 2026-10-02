@@ -19,6 +19,11 @@
 
 ### Changed
 
+- **BREAKING:** **Background `bash` results are structured in codemode.** A background call now
+  resolves to `{ background, command, shell_job_id }` instead of a string, so a script reads the job
+  id as a field instead of parsing the text; scripts that treated the background result as text must
+  switch to `shell_job_id`. Foreground results keep the built-in
+  `{ output, truncated, exit_code, wall_time_seconds }` shape.
 - **`/shell` opens on an empty job list.** The inspector renders an empty frame instead of doing
   nothing when there are no shell jobs, and clearing the last entry keeps that frame on screen
   rather than closing the overlay.

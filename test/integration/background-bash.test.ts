@@ -62,9 +62,24 @@ describe("lune-shell-inspector background bash", () => {
         });
 
         assert.equal(run.failed, false, `expected the call to succeed: ${run.error?.message ?? ""}`);
-        assert.equal(jobId, "call-immediate");
-        assert.equal(resultText(requireResult(run)), `Background shell started with ID call-immediate: ${command}`);
-        assert.deepEqual(requireResult(run).details, { shellJobId: "call-immediate", background: true });
+        assert.equal(jobId, "call-immediate", "the job id must be the tool call id");
+        assert.equal(
+            resultText(requireResult(run)),
+            `Background shell started with ID call-immediate: ${command}`,
+            "the immediate result must name the job and the command",
+        );
+        assert.deepEqual(
+            requireResult(run).details,
+            { shellJobId: "call-immediate", background: true },
+            "the details must point at the started job",
+        );
+        // pi 1.0's codemode reads a declared tool result through structuredContent, so the job start
+        // must be reported there as the same id and command the text carries.
+        assert.deepEqual(
+            requireResult(run).structuredContent,
+            { background: true, shell_job_id: "call-immediate", command },
+            "the call must answer with the structured job start",
+        );
         assert.deepEqual(run.updates, [], "a background call must not stream to its caller");
         assert.ok(run.durationMs < 1000, `the call must return while the 2s sleep runs, took ${run.durationMs}ms`);
 
@@ -74,9 +89,9 @@ describe("lune-shell-inspector background bash", () => {
         assert.equal(running.output.content, "", "no output has been produced yet");
 
         const settled = await waitForJobSettled("call-immediate");
-        assert.equal(settled.status, "completed");
-        assert.equal(settled.exitCode, 0);
-        assert.equal(settled.output.content, "");
+        assert.equal(settled.status, "completed", "the sleeping command must settle as completed");
+        assert.equal(settled.exitCode, 0, "a completed job must carry the process exit code");
+        assert.equal(settled.output.content, "", "the command printed nothing");
     });
 
     it("registers the job with the call id, the command, ctx.cwd and a live controller", async () => {
@@ -92,11 +107,11 @@ describe("lune-shell-inspector background bash", () => {
         const job = shellManager.getJob(jobId);
         assert.ok(job, "expected the started job");
 
-        assert.equal(job.id, "call-fields");
-        assert.equal(job.command, "echo job-fields");
+        assert.equal(job.id, "call-fields", "the job id must be the tool call id");
+        assert.equal(job.command, "echo job-fields", "the job must keep the command it was started with");
         assert.equal(job.label, "job fields", "the requested label must reach the job");
-        assert.equal(job.cwd, session.ctx.cwd);
-        assert.equal(job.status, "running");
+        assert.equal(job.cwd, session.ctx.cwd, "the job cwd must be the call context's cwd");
+        assert.equal(job.status, "running", "a freshly started job must be running");
         assert.equal(job.controller.signal.aborted, false, "a running job's controller is not aborted");
 
         await waitForJobSettled("call-fields");
@@ -112,7 +127,7 @@ describe("lune-shell-inspector background bash", () => {
             label: "  training run  ",
         });
 
-        assert.equal(shellManager.getJob(labelled.jobId)?.label, "training run");
+        assert.equal(shellManager.getJob(labelled.jobId)?.label, "training run", "the label must be stored trimmed");
 
         await waitForJobSettled(labelled.jobId);
 
@@ -123,7 +138,7 @@ describe("lune-shell-inspector background bash", () => {
             label: "   ",
         });
 
-        assert.equal(shellManager.getJob(blank.jobId)?.label, undefined);
+        assert.equal(shellManager.getJob(blank.jobId)?.label, undefined, "a blank label must be dropped instead of stored");
 
         await waitForJobSettled(blank.jobId);
     });
@@ -140,14 +155,14 @@ describe("lune-shell-inspector background bash", () => {
         await waitFor("the first chunk to reach the job", () => (shellManager.getJob(jobId)?.output.content ?? "").includes("first"));
 
         const streaming = shellManager.getJob(jobId);
-        assert.ok(streaming);
+        assert.ok(streaming, "expected the streaming job to be stored");
         assert.equal(streaming.status, "running", "the job must still be running after its first chunk");
         assert.equal(streaming.output.content, "first\n", "no later chunk may have arrived yet");
 
         const settled = await waitForJobSettled(jobId);
-        assert.equal(settled.status, "completed");
-        assert.equal(settled.output.content, "first\nsecond\nthird\n");
-        assert.ok(settled.lastActivityAt >= settled.startedAt);
+        assert.equal(settled.status, "completed", "the streaming command must settle as completed");
+        assert.equal(settled.output.content, "first\nsecond\nthird\n", "the job must keep every streamed chunk in order");
+        assert.ok(settled.lastActivityAt >= settled.startedAt, "the last activity must not predate the start");
     });
 
     it("keeps the streamed bytes as they arrive: carriage returns and ANSI escapes included", async () => {
@@ -162,8 +177,8 @@ describe("lune-shell-inspector background bash", () => {
 
         const settled = await waitForJobSettled(jobId);
 
-        assert.equal(settled.status, "completed");
-        assert.equal(settled.output.content, "plain\ncr\rback\ncolored: \u001b[31mred\u001b[0m\n");
+        assert.equal(settled.status, "completed", "the raw-stream command must settle as completed");
+        assert.equal(settled.output.content, "plain\ncr\rback\ncolored: \u001b[31mred\u001b[0m\n", "the job must keep the raw bytes, escapes included");
     });
 
     it("shows the progress fixture's screen instead of its redraws", async () => {
@@ -179,8 +194,8 @@ describe("lune-shell-inspector background bash", () => {
         const settled = await waitForJobSettled(jobId);
         const screen = await readJobScreen(jobId);
 
-        assert.ok(settled.output.content.includes("\r"), "the raw output must still carry every redraw");
-        assert.deepEqual(screen, ["progress: 100%", "progress: done"]);
+        assert.ok(settled.output.content.includes("\r"), `the raw output must still carry every redraw, got ${JSON.stringify(settled.output.content.slice(0, 200))}`);
+        assert.deepEqual(screen, ["progress: 100%", "progress: done"], "the screen must show the final redraw only");
     });
 
     it("shows the spinner fixture's erased line as its final screen line", async () => {
@@ -196,8 +211,8 @@ describe("lune-shell-inspector background bash", () => {
         const settled = await waitForJobSettled(jobId);
         const screen = await readJobScreen(jobId);
 
-        assert.ok(settled.output.content.includes("\u001b[2K"), "the raw output must still carry the erase-line sequence");
-        assert.deepEqual(screen, ["spinner: done"]);
+        assert.ok(settled.output.content.includes("\u001b[2K"), `the raw output must still carry the erase-line sequence, got ${JSON.stringify(settled.output.content.slice(0, 200))}`);
+        assert.deepEqual(screen, ["spinner: done"], "the erased spinner frames must not reach the screen");
     });
 
     it("shows the vt-shapes fixture exactly as the terminal executed it", async () => {
@@ -228,7 +243,7 @@ describe("lune-shell-inspector background bash", () => {
             "日本語の進捗テスト: 五割 🚀",
             `wide: ${"漢".repeat(70)}`,
             "vt-shapes: done",
-        ]);
+        ], "the screen must match the executed stream line for line");
     });
 
     it("spills the complete output of a flood while the screen and the reported tail stay bounded", async () => {
@@ -244,35 +259,35 @@ describe("lune-shell-inspector background bash", () => {
 
         const settled = await waitForJobSettled(jobId, 20_000);
 
-        assert.equal(settled.status, "completed");
+        assert.equal(settled.status, "completed", "the flood must settle as completed");
         assert.equal(settled.output.truncated, true, "the flood must spill to a file");
         assert.ok(
             settled.output.totalBytes > 200 * 1024,
             `expected the complete ~200KB flood, got ${settled.output.totalBytes} bytes`,
         );
-        assert.ok(settled.output.content.includes("flood line 05000"), "the last flood line must stay in the tail");
+        assert.ok(settled.output.content.includes("flood line 05000"), `the last flood line must stay in the tail, got ${JSON.stringify(settled.output.content.slice(-200))}`);
 
         const fullOutputPath = settled.output.fullOutputPath;
-        assert.ok(fullOutputPath, "a spilled job must expose the file with the complete output");
+        assert.ok(fullOutputPath, `a spilled job must expose the file with the complete output, got ${String(fullOutputPath)}`);
         const persisted = readFileSync(fullOutputPath, "utf8");
-        assert.ok(persisted.includes("flood line 00001"), "the spill file must keep the first line");
-        assert.ok(persisted.includes("flood line 05000"), "the spill file must keep the last line");
+        assert.ok(persisted.includes("flood line 00001"), `the spill file must keep the first line, got ${JSON.stringify(persisted.slice(0, 200))}`);
+        assert.ok(persisted.includes("flood line 05000"), `the spill file must keep the last line, got ${JSON.stringify(persisted.slice(-200))}`);
 
         const reported = shellManager.getJobOutput(jobId);
-        assert.equal(reported.split("\n").at(0), `[Output truncated. Full output: ${fullOutputPath}]`);
-        assert.ok(reported.includes("flood line 05000"));
-        assert.ok(reported.length < persisted.length, "the reported text must stay bounded");
+        assert.equal(reported.split("\n").at(0), `[Output truncated. Full output: ${fullOutputPath}]`, "the reported text must open with the spill footer");
+        assert.ok(reported.includes("flood line 05000"), `the reported tail must keep the newest line, got ${JSON.stringify(reported.slice(-200))}`);
+        assert.ok(reported.length < persisted.length, `the reported text must stay bounded, reported ${reported.length} vs persisted ${persisted.length} characters`);
 
         // The screen converts the same run in arrival order (fifty streamed batches of a hundred
         // lines), so the newest line is last and nothing was reordered or lost on the way - while its
         // own history is bounded by the emulator's scrollback, like the retained tail.
         const screen = await readJobScreen(jobId);
-        assert.equal(screen.at(-1), `flood line 05000 ${"x".repeat(24)}`);
+        assert.equal(screen.at(-1), `flood line 05000 ${"x".repeat(24)}`, "the newest flood line must be last on the screen");
         assert.ok(
             screen.length <= DEFAULT_MAX_LINES + 50,
             `the screen history must stay bounded, kept ${screen.length}`,
         );
-        assert.ok(!screen.includes(`flood line 00001 ${"x".repeat(24)}`), "the oldest lines must have scrolled off");
+        assert.ok(!screen.includes(`flood line 00001 ${"x".repeat(24)}`), `the oldest lines must have scrolled off, got ${screen.length} screen lines starting with ${JSON.stringify(screen.slice(0, 2))}`);
 
         rmSync(fullOutputPath, { force: true });
     });
@@ -290,10 +305,10 @@ describe("lune-shell-inspector background bash", () => {
 
         const settled = await waitForJobSettled(jobId);
 
-        assert.equal(settled.status, "failed");
-        assert.equal(settled.exitCode, 3);
-        assert.equal(settled.error, "Background shell exited with code 3");
-        assert.equal(settled.output.content, "before failure\n");
+        assert.equal(settled.status, "failed", "a non-zero exit must settle as failed");
+        assert.equal(settled.exitCode, 3, "the failing job must keep its exit code");
+        assert.equal(settled.error, "Background shell exited with code 3", "the failing job must name the exit code in its reason");
+        assert.equal(settled.output.content, "before failure\n", "output produced before the failure must be kept");
         assert.equal(settled.controller.signal.aborted, false, "a non-zero exit is not a caller kill");
     });
 
@@ -316,8 +331,8 @@ describe("lune-shell-inspector background bash", () => {
             const settled = await waitForJobSettled(jobId);
 
             assert.equal(settled.status, "failed", `exit ${code} must fail the job`);
-            assert.equal(settled.exitCode, code);
-            assert.equal(settled.error, `Background shell exited with code ${code}`);
+            assert.equal(settled.exitCode, code, `the ${code} exit code must be recorded`);
+            assert.equal(settled.error, `Background shell exited with code ${code}`, "the reason must name the exit code");
             assert.equal(
                 shellManager.getJob(jobId)?.controller.signal.aborted,
                 false,
@@ -340,11 +355,11 @@ describe("lune-shell-inspector background bash", () => {
 
         const settled = await waitForJobSettled(jobId);
 
-        assert.equal(settled.status, "failed");
-        assert.equal(settled.error, "timeout:1");
+        assert.equal(settled.status, "failed", "a timed-out execution must settle as failed");
+        assert.equal(settled.error, "timeout:1", "the job must record the runner's timeout reason");
         assert.equal(settled.exitCode, undefined, "a failed execution has no process exit code");
         assert.equal(settled.controller.signal.aborted, false, "a timeout is not a caller kill");
-        assert.ok(Date.now() - startedAt < 4000, "the timeout must cut the 5s sleep short");
+        assert.ok(Date.now() - startedAt < 4000, `the timeout must cut the 5s sleep short, took ${Date.now() - startedAt}ms`);
     });
 
     it("fails a job whose working directory does not exist", async () => {
@@ -359,9 +374,9 @@ describe("lune-shell-inspector background bash", () => {
 
         const settled = await waitForJobSettled(jobId);
 
-        assert.equal(settled.cwd, missingDir);
-        assert.equal(settled.status, "failed");
-        assert.equal(settled.controller.signal.aborted, false);
+        assert.equal(settled.cwd, missingDir, "the job must keep the requested cwd even on failure");
+        assert.equal(settled.status, "failed", "a bad cwd must fail the job instead of completing silently");
+        assert.equal(settled.controller.signal.aborted, false, "a bad cwd is not a caller kill");
         assert.ok(
             settled.error?.includes(`Working directory does not exist: ${missingDir}`),
             `expected the runner's cwd error, got ${JSON.stringify(settled.error)}`,
@@ -386,12 +401,12 @@ describe("lune-shell-inspector background bash", () => {
         const slowSettled = await waitForJobSettled(slow.jobId);
 
         assert.equal(fastSettled.status, "failed", "a non-zero exit must fail the job");
-        assert.equal(fastSettled.error, "Background shell exited with code 2");
-        assert.equal(fastSettled.output.content, "fast\n");
-        assert.equal(fastSettled.exitCode, 2);
-        assert.equal(slowSettled.status, "completed");
-        assert.equal(slowSettled.output.content, "slow\n");
-        assert.equal(slowSettled.exitCode, 0);
+        assert.equal(fastSettled.error, "Background shell exited with code 2", "the fast job's failure must name its exit code");
+        assert.equal(fastSettled.output.content, "fast\n", "the fast job must keep its own output");
+        assert.equal(fastSettled.exitCode, 2, "the fast job must keep its own exit code");
+        assert.equal(slowSettled.status, "completed", "the slow job must complete independently");
+        assert.equal(slowSettled.output.content, "slow\n", "the slow job must keep its own output");
+        assert.equal(slowSettled.exitCode, 0, "the slow job must keep its own exit code");
         assert.equal(shellManager.getRunningJobsList().length, 0, "both jobs must be settled");
     });
 
@@ -411,11 +426,11 @@ describe("lune-shell-inspector background bash", () => {
             toolCallId: "call-duplicate",
         });
 
-        assert.match(requireError(duplicate).message, /Shell job already exists: call-duplicate/);
+        assert.match(requireError(duplicate).message, /Shell job already exists: call-duplicate/, "the duplicate start must be refused by name");
         assert.equal(shellManager.getJob("call-duplicate")?.status, "running", "the original job must survive");
 
         const settled = await waitForJobSettled(first.jobId);
-        assert.equal(settled.status, "completed");
+        assert.equal(settled.status, "completed", "the original job must finish normally");
         assert.equal(settled.output.content, "", "the rejected duplicate must not have written to the job");
     });
 
@@ -429,14 +444,14 @@ describe("lune-shell-inspector background bash", () => {
             toolCallId: "call-kill-race",
         });
 
-        assert.equal(shellManager.settleJob(jobId, { type: "killed", error: "manual kill" }), true);
+        assert.equal(shellManager.settleJob(jobId, { type: "killed", error: "manual kill" }), true, "the first settle must be accepted");
 
         // Give the aborted execution time to reject and reach its settle call.
         await new Promise((resolve) => setTimeout(resolve, 500));
 
         const job = shellManager.getJob(jobId);
         assert.equal(job?.status, "killed", "the explicit kill must stay the outcome");
-        assert.equal(job?.error, "manual kill");
+        assert.equal(job?.error, "manual kill", "the racing rejection must not rewrite the kill reason");
     });
 
     it("ignores the execution's settle after the session dropped the job", async () => {
@@ -469,13 +484,13 @@ describe("lune-shell-inspector background bash", () => {
         );
         assert.equal(session.host.sendMessageCalls.length, 1, "the teardown kill notifies once");
         const notification = session.host.sendMessageCalls[0]!;
-        assert.equal(notification.message.customType, "background-shell-notification");
+        assert.equal(notification.message.customType, "background-shell-notification", "the teardown kill must notify as a shell notification");
         assert.deepEqual(notification.message.details, {
             shellJobId: jobId,
             status: "killed",
             exitCode: undefined,
-        });
-        assert.match(String(notification.message.content), /^Background shell call-clear-race killed\./);
+        }, "the notification must identify the killed job");
+        assert.match(String(notification.message.content), /^Background shell call-clear-race killed\./, "the notification must open with the job id and status");
     });
 
     it("refuses a chunk that arrives after teardown instead of resurrecting the job", async () => {
@@ -495,6 +510,7 @@ describe("lune-shell-inspector background bash", () => {
         assert.throws(
             () => shellManager.appendOutput(jobId, "buffered chunk"),
             /Unknown shell job: call-teardown-chunk/,
+            "a chunk for a cleared job must be refused loudly",
         );
         assert.equal(shellManager.getJob(jobId), undefined, "the cleared job must stay gone");
         assert.equal(

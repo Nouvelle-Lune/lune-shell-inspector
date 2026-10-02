@@ -159,17 +159,17 @@ describe("lune-shell-inspector kill_background_shell invocation", () => {
             completedCount: 1,
             failedCount: 1,
             killedCount: 0,
-        });
+        }, "the two running shells and the two settled ones must be counted before the kill");
 
         const text = await killShell(killTool, target.jobId);
 
         const job = shellManager.getJob(target.jobId);
         assert.ok(job, "a killed shell must stay in the manager until it is explicitly cleared");
-        assert.equal(job.status, "killed");
+        assert.equal(job.status, "killed", "the tool must settle the requested shell as killed");
         assert.equal(job.controller.signal.aborted, true, "the kill must abort the job's own controller");
-        assert.equal(job.error, "Shell killed by agent");
+        assert.equal(job.error, "Shell killed by agent", "the kill must record the agent's reason");
         assert.equal(job.exitCode, undefined, "a killed job has no process exit code");
-        assert.ok(job.output.content.includes("target-ready"), "the output collected before the kill must survive");
+        assert.ok(job.output.content.includes("target-ready"), `the output collected before the kill must survive, got ${JSON.stringify(job.output.content)}`);
         assert.match(text, /killed/i, `the result must report the kill: ${text}`);
         assert.ok(text.includes(target.jobId), `the result must identify the killed job: ${text}`);
 
@@ -178,14 +178,14 @@ describe("lune-shell-inspector kill_background_shell invocation", () => {
             completedCount: 1,
             failedCount: 1,
             killedCount: 1,
-        });
+        }, "only the target shell may move from running to killed");
         const bystander = shellManager.getJob(other.jobId);
         assert.equal(bystander?.status, "running", "only the requested shell may be killed");
-        assert.equal(bystander?.controller.signal.aborted, false);
+        assert.equal(bystander?.controller.signal.aborted, false, "the bystander's process must stay untouched");
 
         // The killed job stays on the read path: background_shell reports its settled status.
         const inspector = loadRegisteredTool(workDir, "background_shell");
-        assert.equal(await inspectShell(inspector, target.jobId), `${target.jobId}: killed - ${targetCommand}`);
+        assert.equal(await inspectShell(inspector, target.jobId), `${target.jobId}: killed - ${targetCommand}`, "the read path must still report the killed shell");
     });
 
     it("notifies the agent exactly once and keeps the job when the aborted execution rejects", async () => {
@@ -211,19 +211,19 @@ describe("lune-shell-inspector kill_background_shell invocation", () => {
             assert.equal(notifications.length, 1, "an agent kill must notify exactly once");
 
             const call = notifications[0]!;
-            assert.equal(call.message.customType, "background-shell-notification");
+            assert.equal(call.message.customType, "background-shell-notification", "the kill must notify under the shell notification type");
             assert.equal(call.message.display, false, "the notification must not enter the transcript");
             assert.equal(call.options?.triggerTurn, true, "the agent must get a turn to read it");
-            assert.equal(call.options?.deliverAs, "steer");
+            assert.equal(call.options?.deliverAs, "steer", "the notification must steer the running turn");
             assert.deepEqual(call.message.details, {
                 shellJobId: jobId,
                 status: "killed",
                 exitCode: undefined,
-            });
+            }, "the notification must identify the killed shell");
 
             const text = messageText(call);
-            assert.ok(text.startsWith(`Background shell ${jobId} killed.`), text);
-            assert.ok(text.includes("Error: Shell killed by agent"), text);
+            assert.ok(text.startsWith(`Background shell ${jobId} killed.`), `the notification must open with the job id and status: ${text}`);
+            assert.ok(text.includes("Error: Shell killed by agent"), `the notification must report the agent's reason: ${text}`);
             assert.ok(
                 text.includes("Output:\nready"),
                 `the output collected before the kill must reach the agent: ${text}`,
@@ -239,14 +239,14 @@ describe("lune-shell-inspector kill_background_shell invocation", () => {
 
             const job = shellManager.getJob(jobId);
             assert.ok(job, "the notification path must not remove the job");
-            assert.equal(job.status, "killed");
+            assert.equal(job.status, "killed", "the late rejection must not change the status");
             assert.equal(job.error, "Shell killed by agent", "the late rejection must not rewrite the reason");
             assert.deepEqual(shellManager.getAllJobsStatusStat(), {
                 runningCount: 0,
                 completedCount: 0,
                 failedCount: 0,
                 killedCount: 1,
-            });
+            }, "the late rejection must not move a counter");
         } finally {
             terminalEvents.stop();
         }
@@ -266,8 +266,8 @@ describe("lune-shell-inspector kill_background_shell invocation", () => {
         );
 
         const text = await killShell(killTool, jobId);
-        assert.match(text, /killed/i, text);
-        assert.equal(shellManager.getJob(jobId)?.status, "killed");
+        assert.match(text, /killed/i, `the result must report the kill: ${text}`);
+        assert.equal(shellManager.getJob(jobId)?.status, "killed", "the job must settle as killed");
 
         // Past the fixture's own deadline, plus a margin for process teardown.
         await new Promise((resolve) => setTimeout(resolve, 1_500));
@@ -275,7 +275,7 @@ describe("lune-shell-inspector kill_background_shell invocation", () => {
         assert.equal(existsSync(markerPath), false, "a killed process tree must not keep executing");
         assert.ok(
             !(shellManager.getJob(jobId)?.output.content ?? "").includes("late"),
-            "no output may arrive after the kill",
+            `no output may arrive after the kill, got ${JSON.stringify(shellManager.getJob(jobId)?.output.content ?? "")}`,
         );
     });
 
@@ -294,13 +294,13 @@ describe("lune-shell-inspector kill_background_shell invocation", () => {
 
         const job = shellManager.getJob(jobId);
         assert.ok(job, "kill must stop execution, not remove the job");
-        assert.equal(job.status, "killed");
+        assert.equal(job.status, "killed", "the kill must settle the job as killed");
         assert.equal(shellManager.getJobOutput(jobId), "kept-one\nkept-two\n", "the raw output must stay readable");
         assert.deepEqual(await readJobScreen(jobId), ["kept-one", "kept-two"], "the xterm screen must stay readable");
 
         // Clearing stays a separate operation: only it drops the settled job and its resources.
         assert.equal(shellManager.clearJob(jobId), true, "a killed job must remain clearable");
-        assert.equal(shellManager.getJob(jobId), undefined);
+        assert.equal(shellManager.getJob(jobId), undefined, "clearing must drop the killed job");
     });
 
     it("answers an unknown job id without throwing, mutating or notifying", async () => {
@@ -320,9 +320,9 @@ describe("lune-shell-inspector kill_background_shell invocation", () => {
         }
 
         // Same model-facing phrasing as background_shell, so unknown ids read the same in both tools.
-        assert.equal(text, "Unknown background shell: missing");
+        assert.equal(text, "Unknown background shell: missing", "an unknown job id must be answered in prose");
         assert.deepEqual(events, [], "an unknown id must not emit a manager event");
-        assert.deepEqual(shellManager.getAllJobsStatusStat(), NO_JOBS);
+        assert.deepEqual(shellManager.getAllJobsStatusStat(), NO_JOBS, "an unknown id must not move a counter");
         assert.deepEqual(session.host.sendMessageCalls, [], "an unknown id must not notify the agent");
     });
 
@@ -344,7 +344,7 @@ describe("lune-shell-inspector kill_background_shell invocation", () => {
             if (status === "killed") {
                 await killShell(killTool, jobId);
             } else {
-                assert.equal((await waitForJobSettled(jobId)).status, status);
+                assert.equal((await waitForJobSettled(jobId)).status, status, `the fixture must settle as ${status}`);
             }
 
             const before = shellManager.getJob(jobId)!;
@@ -375,9 +375,9 @@ describe("lune-shell-inspector kill_background_shell invocation", () => {
 
             const after = shellManager.getJob(jobId);
             assert.ok(after, "a refused kill must not remove the job");
-            assert.equal(after.status, snapshot.status);
-            assert.equal(after.error, snapshot.error);
-            assert.equal(after.exitCode, snapshot.exitCode);
+            assert.equal(after.status, snapshot.status, "a refused kill must not change the status");
+            assert.equal(after.error, snapshot.error, "a refused kill must not change the reason");
+            assert.equal(after.exitCode, snapshot.exitCode, "a refused kill must not change the exit code");
             assert.equal(after.finishedAt, snapshot.finishedAt, "a refused kill must not restamp the finish");
             assert.equal(
                 after.controller.signal.aborted,
@@ -404,24 +404,24 @@ describe("lune-shell-inspector kill_background_shell invocation", () => {
 
         try {
             const first = await killShell(killTool, jobId);
-            assert.match(first, /killed/i, first);
+            assert.match(first, /killed/i, `the first result must report the kill: ${first}`);
 
             const killedJob = shellManager.getJob(jobId)!;
             const finishedAt = killedJob.finishedAt;
-            assert.ok(finishedAt !== undefined, "a successful kill must stamp the finish");
-            assert.equal(killedJob.error, "Shell killed by agent");
-            assert.deepEqual(terminalEvents.events, ["job-killed"]);
-            assert.equal(notificationsFor(session, jobId).length, 1);
+            assert.ok(finishedAt !== undefined, `a successful kill must stamp the finish, got ${String(finishedAt)}`);
+            assert.equal(killedJob.error, "Shell killed by agent", "the first kill must record its reason");
+            assert.deepEqual(terminalEvents.events, ["job-killed"], "the first kill must emit one kill event");
+            assert.equal(notificationsFor(session, jobId).length, 1, "the first kill must notify once");
 
             const second = await killShell(killTool, jobId);
 
-            assert.ok(second.includes(jobId), second);
-            assert.match(second, /(not running|no longer running|already)/i, second);
+            assert.ok(second.includes(jobId), `the refusal must identify the shell: ${second}`);
+            assert.match(second, /(not running|no longer running|already)/i, `the refusal must explain that the shell settled: ${second}`);
             const after = shellManager.getJob(jobId)!;
-            assert.equal(after.status, "killed");
+            assert.equal(after.status, "killed", "the repeated kill must leave the status as killed");
             assert.equal(after.error, "Shell killed by agent", "a repeated kill must not rewrite the reason");
             assert.equal(after.finishedAt, finishedAt, "a repeated kill must not restamp the finish");
-            assert.equal(after.controller.signal.aborted, true);
+            assert.equal(after.controller.signal.aborted, true, "the repeated kill must keep the abort");
             assert.deepEqual(
                 shellManager.getAllJobsStatusStat(),
                 { runningCount: 0, completedCount: 0, failedCount: 0, killedCount: 1 },

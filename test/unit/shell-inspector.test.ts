@@ -210,17 +210,17 @@ describe("shell inspector", () => {
 
         const visible = visibleOutput();
 
-        assert.ok(visible.length > 1, "the pane must show several output lines");
-        assert.equal(visible.at(-1), "line 40");
-        assert.ok(!visible.includes("line 1"), "the pane must not start at the oldest line");
-        assert.equal(pausedMarker(), undefined);
+        assert.ok(visible.length > 1, `the pane must show several output lines, got ${visible.length}`);
+        assert.equal(visible.at(-1), "line 40", "following mode must end on the newest line");
+        assert.ok(!visible.includes("line 1"), `the pane must not start at the oldest line, got ${JSON.stringify(visible)}`);
+        assert.equal(pausedMarker(), undefined, "following the newest output must not draw a pause marker");
     });
 
     it("shows the newest output of a short job without a pause marker", async () => {
         await addJob("job-1", "echo done", lineOutput(3));
 
-        assert.deepEqual(visibleOutput(), ["line 1", "line 2", "line 3"]);
-        assert.equal(pausedMarker(), undefined);
+        assert.deepEqual(visibleOutput(), ["line 1", "line 2", "line 3"], "a short job must show all its output");
+        assert.equal(pausedMarker(), undefined, "a short job has nothing to pause");
     });
 
     it("renders every settled status with its own colour", () => {
@@ -235,9 +235,9 @@ describe("shell inspector", () => {
 
         const { fgCalls } = frame();
 
-        assert.ok(fgCalls.some((call) => call.color === "success" && call.text === "completed"));
-        assert.ok(fgCalls.some((call) => call.color === "error" && call.text === "failed"));
-        assert.ok(fgCalls.some((call) => call.color === "muted" && call.text === "killed"));
+        assert.ok(fgCalls.some((call) => call.color === "success" && call.text === "completed"), `a completed shell must be drawn in the success colour, got ${JSON.stringify(fgCalls)}`);
+        assert.ok(fgCalls.some((call) => call.color === "error" && call.text === "failed"), `a failed shell must be drawn in the error colour, got ${JSON.stringify(fgCalls)}`);
+        assert.ok(fgCalls.some((call) => call.color === "muted" && call.text === "killed"), `a killed shell must be drawn muted, got ${JSON.stringify(fgCalls)}`);
     });
 
     it("scrolls one line back with Shift+Up and pauses the newest output", async () => {
@@ -248,9 +248,9 @@ describe("shell inspector", () => {
 
         const visible = visibleOutput();
 
-        assert.equal(visible.at(-1), "line 39");
-        assert.ok(!visible.includes("line 40"), "the newest line must leave the pane while paused");
-        assert.equal(pausedMarker(), " · paused ↑1");
+        assert.equal(visible.at(-1), "line 39", "Shift+Up must move the pane one line back");
+        assert.ok(!visible.includes("line 40"), `the newest line must leave the pane while paused, got ${JSON.stringify(visible)}`);
+        assert.equal(pausedMarker(), " · paused ↑1", "the pane must mark how far it is paused");
         assert.equal(renderRequests, redrawsBefore + 1, "scrolling must ask for a redraw");
     });
 
@@ -259,7 +259,7 @@ describe("shell inspector", () => {
 
         press("K");
 
-        assert.equal(visibleOutput().at(-1), "line 39");
+        assert.equal(visibleOutput().at(-1), "line 39", "Shift+K must scroll like Shift+Up");
     });
 
     it("scrolls one line forward with Shift+Down and leaves the pause", async () => {
@@ -267,12 +267,12 @@ describe("shell inspector", () => {
 
         press(SHIFT_UP);
         press(SHIFT_UP);
-        assert.equal(visibleOutput().at(-1), "line 38");
+        assert.equal(visibleOutput().at(-1), "line 38", "two scrolls must move two lines back");
 
         press(SHIFT_DOWN);
 
-        assert.equal(visibleOutput().at(-1), "line 39");
-        assert.equal(pausedMarker(), " · paused ↑1");
+        assert.equal(visibleOutput().at(-1), "line 39", "Shift+Down must move one line forward");
+        assert.equal(pausedMarker(), " · paused ↑1", "the pause marker must count down with the scroll");
     });
 
     it("resumes following once the newest line is in view again", async () => {
@@ -281,8 +281,8 @@ describe("shell inspector", () => {
         press(SHIFT_UP);
         press("J");
 
-        assert.equal(pausedMarker(), undefined);
-        assert.equal(visibleOutput().at(-1), "line 40");
+        assert.equal(pausedMarker(), undefined, "returning to the newest line must clear the pause");
+        assert.equal(visibleOutput().at(-1), "line 40", "the pane must show the newest line again");
 
         await writeOutput("job-1", "\nline 41");
 
@@ -299,7 +299,7 @@ describe("shell inspector", () => {
         await writeOutput("job-1", "\nline 41");
 
         assert.deepEqual(visibleOutput(), paused, "a paused pane must not drift with the tail");
-        assert.equal(pausedMarker(), " · paused ↑3");
+        assert.equal(pausedMarker(), " · paused ↑3", "the paused marker must keep its distance while output continues");
     });
 
     it("does not scroll past the oldest line", async () => {
@@ -309,7 +309,7 @@ describe("shell inspector", () => {
             press(SHIFT_UP);
         }
 
-        assert.equal(visibleOutput().at(0), "line 1");
+        assert.equal(visibleOutput().at(0), "line 1", "scrolling must stop at the oldest line");
     });
 
     it("ignores scrolling on a job with nothing to scroll", async () => {
@@ -317,8 +317,8 @@ describe("shell inspector", () => {
 
         press(SHIFT_UP);
 
-        assert.deepEqual(visibleOutput(), ["line 1", "line 2", "line 3"]);
-        assert.equal(pausedMarker(), undefined);
+        assert.deepEqual(visibleOutput(), ["line 1", "line 2", "line 3"], "a pane with nothing to scroll must stay put");
+        assert.equal(pausedMarker(), undefined, "an ignored scroll must not pause the pane");
     });
 
     it("jumps to the oldest line with Home and back to the newest with End", async () => {
@@ -326,13 +326,13 @@ describe("shell inspector", () => {
 
         press(HOME);
 
-        assert.equal(visibleOutput().at(0), "line 1");
-        assert.ok(pausedMarker()?.startsWith(" · paused ↑"));
+        assert.equal(visibleOutput().at(0), "line 1", "Home must jump to the oldest line");
+        assert.ok(pausedMarker()?.startsWith(" · paused ↑"), `Home must mark the pane as paused, got ${JSON.stringify(pausedMarker())}`);
 
         press(END);
 
-        assert.equal(visibleOutput().at(-1), "line 40");
-        assert.equal(pausedMarker(), undefined);
+        assert.equal(visibleOutput().at(-1), "line 40", "End must jump back to the newest line");
+        assert.equal(pausedMarker(), undefined, "End must resume following the newest output");
     });
 
     it("shows the newest output of the selected job after switching jobs", async () => {
@@ -340,17 +340,17 @@ describe("shell inspector", () => {
         await addJob("job-b", "echo b", lineOutput(3));
 
         press(SHIFT_UP);
-        assert.equal(pausedMarker(), " · paused ↑1");
+        assert.equal(pausedMarker(), " · paused ↑1", "the first job must pause one line back");
 
         press("j");
 
-        assert.deepEqual(visibleOutput(), ["line 1", "line 2", "line 3"]);
-        assert.equal(pausedMarker(), undefined);
+        assert.deepEqual(visibleOutput(), ["line 1", "line 2", "line 3"], "switching jobs must show the new job's output");
+        assert.equal(pausedMarker(), undefined, "the new job must start following its newest output");
 
         press("k");
 
         assert.equal(visibleOutput().at(-1), "line 40", "the previous job must reset to its newest output");
-        assert.equal(pausedMarker(), undefined);
+        assert.equal(pausedMarker(), undefined, "switching back must not restore the old pause");
     });
 
     it("keeps plain j and k on job selection instead of scrolling", async () => {
@@ -359,7 +359,7 @@ describe("shell inspector", () => {
 
         press("j");
 
-        assert.deepEqual(visibleOutput(), ["line 1", "line 2", "line 3"]);
+        assert.deepEqual(visibleOutput(), ["line 1", "line 2", "line 3"], "plain j must select a job, not scroll the pane");
     });
 
     it("shows the last chunk even when the job settles before the next frame", async () => {
@@ -371,7 +371,7 @@ describe("shell inspector", () => {
 
         await new Promise((resolve) => setTimeout(resolve, 0));
 
-        assert.equal(visibleOutput().at(-1), "step 2");
+        assert.equal(visibleOutput().at(-1), "step 2", "the last chunk must reach the pane even when the job settled");
     });
 
     it("renders control sequences as the screen state they produce", async () => {
@@ -386,10 +386,10 @@ describe("shell inspector", () => {
             "\x1b]0;build\x07done\n",
         );
 
-        assert.deepEqual(visibleOutput(), ["flip-pairwise: 100%", "done"]);
+        assert.deepEqual(visibleOutput(), ["flip-pairwise: 100%", "done"], "the pane must show the executed screen, not the redraw stack");
         assert.ok(
             !visibleOutput().some((line) => line.includes("\x1b")),
-            "no escape sequence may survive into the pane",
+            `no escape sequence may survive into the pane, got ${JSON.stringify(visibleOutput())}`,
         );
     });
 
@@ -401,20 +401,20 @@ describe("shell inspector", () => {
         const visible = visibleOutput();
 
         assert.equal(visible.length, 1, "a wrapped line must not fill the pane with rows");
-        assert.ok(visible[0]!.startsWith("x".repeat(50)));
+        assert.ok(visible[0]!.startsWith("x".repeat(50)), `the wrapped line must keep its beginning, got ${JSON.stringify(visible[0])}`);
     });
 
     it("says that a running job has no output yet", async () => {
         shellManager.startJob({ id: "job-1", command: "sleep 5", cwd: "/work", controller: new AbortController() });
 
-        assert.deepEqual(visibleOutput(), ["no output yet"]);
+        assert.deepEqual(visibleOutput(), ["no output yet"], "a running job without output must say so");
     });
 
     it("keeps the last screen of a settled job", async () => {
         await addJob("job-1", "npm test", "suite 1 ok\n");
         shellManager.settleJob("job-1", { type: "completed", exitCode: 0 });
 
-        assert.deepEqual(visibleOutput(), ["suite 1 ok"]);
+        assert.deepEqual(visibleOutput(), ["suite 1 ok"], "a settled job must keep its last screen");
     });
 
     it("kills the selected running shell with x", async () => {
@@ -428,13 +428,14 @@ describe("shell inspector", () => {
 
         const killed = shellManager.getJob("job-b");
         assert.ok(killed, "the killed shell must stay listed");
-        assert.equal(killed.status, "killed");
-        assert.equal(killed.error, "Shell killed by user");
+        assert.equal(killed.status, "killed", "x must settle the selected shell as killed");
+        assert.equal(killed.error, "Shell killed by user", "the kill must record the user's reason");
         assert.equal(killed.controller.signal.aborted, true, "killing a shell must abort its process tree");
         assert.equal(shellManager.getJob("job-a")?.status, "running", "only the selected shell is killed");
         assert.deepEqual(
             shellManager.getAllJobsStatusStat(),
             { runningCount: 1, completedCount: 0, failedCount: 0, killedCount: 1 },
+            "the kill must move only the selected shell's counter",
         );
         assert.equal(renderRequests, redrawsBefore + 1, "the kill must redraw the pane");
     });
@@ -446,7 +447,7 @@ describe("shell inspector", () => {
         press("x");
 
         assert.equal(shellManager.getJob("job-a")?.status, "killed", "the selection starts on the first shell");
-        assert.equal(shellManager.getJob("job-b")?.status, "running");
+        assert.equal(shellManager.getJob("job-b")?.status, "running", "the unselected shell must survive");
         assert.equal(visibleOutput().at(-1), "line 40", "the pane must keep showing the shell that was killed");
     });
 
@@ -478,14 +479,15 @@ describe("shell inspector", () => {
         press("x");
 
         const job = shellManager.getJob("job-1");
-        assert.ok(job);
+        assert.ok(job, "the settled shell must stay listed");
         assert.equal(job.status, "completed", "a settled shell must not become killed");
-        assert.equal(job.exitCode, 0);
-        assert.equal(job.error, undefined);
+        assert.equal(job.exitCode, 0, "a refused kill must not change the exit code");
+        assert.equal(job.error, undefined, "a refused kill must not record a reason");
         assert.equal(job.controller.signal.aborted, false, "a refused kill must not abort anything");
         assert.deepEqual(
             shellManager.getAllJobsStatusStat(),
             { runningCount: 0, completedCount: 1, failedCount: 0, killedCount: 0 },
+            "a refused kill must not move a counter",
         );
     });
 
@@ -495,8 +497,8 @@ describe("shell inspector", () => {
         press("x");
         press("x");
 
-        assert.equal(shellManager.getJob("job-1")?.status, "killed");
-        assert.equal(shellManager.getJob("job-1")?.error, "Shell killed by user");
+        assert.equal(shellManager.getJob("job-1")?.status, "killed", "the first x must settle the shell as killed");
+        assert.equal(shellManager.getJob("job-1")?.error, "Shell killed by user", "the second x must not rewrite the reason");
         assert.deepEqual(
             shellManager.getAllJobsStatusStat(),
             { runningCount: 0, completedCount: 0, failedCount: 0, killedCount: 1 },
@@ -530,17 +532,17 @@ describe("shell inspector", () => {
                 completedCount: 0,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "clearing the last shell must empty every counter");
 
             const { lines, fgCalls } = frame();
             const footer = lines.at(-2) ?? "";
             const success = "Cleared npm test";
 
             assert.ok(footer.includes(success), `the footer must confirm the clear: ${footer}`);
-            assert.ok(!footer.includes("x to kill"), "the notice must replace the key hints");
+            assert.ok(!footer.includes("x to kill"), `the notice must replace the key hints, got ${JSON.stringify(footer)}`);
             assert.ok(
                 fgCalls.some((call) => call.color === "success" && call.text.includes(success)),
-                "the confirmation must use the success colour",
+                `the confirmation must use the success colour, got ${JSON.stringify(fgCalls)}`,
             );
         });
     }
@@ -553,7 +555,7 @@ describe("shell inspector", () => {
         press("c");
 
         const job = shellManager.getJob("job-1");
-        assert.ok(job);
+        assert.ok(job, "a running shell must stay in the manager");
         assert.equal(job.status, "running", "a running shell must not be cleared");
         assert.equal(controller.signal.aborted, false, "the refusal must not touch the process");
         assert.deepEqual(shellManager.getAllJobsStatusStat(), {
@@ -561,7 +563,7 @@ describe("shell inspector", () => {
             completedCount: 0,
             failedCount: 0,
             killedCount: 0,
-        });
+        }, "a refused clear must not move a counter");
         assert.equal(renderRequests, redrawsBefore + 1, "the refusal must repaint the footer");
 
         const { lines, fgCalls } = frame();
@@ -569,10 +571,10 @@ describe("shell inspector", () => {
         const refusal = "Clear failed, only completed, failed, or killed";
 
         assert.ok(footer.includes(refusal), `the footer must explain the refusal: ${footer}`);
-        assert.ok(!footer.includes("x to kill"), "the notice must replace the key hints");
+        assert.ok(!footer.includes("x to kill"), `the notice must replace the key hints, got ${JSON.stringify(footer)}`);
         assert.ok(
             fgCalls.some((call) => call.color === "accent" && call.text.includes(refusal)),
-            "the refusal must use the accent colour",
+            `the refusal must use the accent colour, got ${JSON.stringify(fgCalls)}`,
         );
     });
 
@@ -586,12 +588,12 @@ describe("shell inspector", () => {
 
         press("c");
 
-        assert.ok(footerLine().includes("Cleared echo done"), "the notice must be visible right after the clear");
+        assert.ok(footerLine().includes("Cleared echo done"), `the notice must be visible right after the clear, got ${JSON.stringify(footerLine())}`);
 
         t.mock.timers.tick(30_000);
 
-        assert.ok(!footerLine().includes("Cleared echo done"), "the notice must disappear on its own");
-        assert.ok(footerLine().includes("x to kill"), "the key hints must come back");
+        assert.ok(!footerLine().includes("Cleared echo done"), `the notice must disappear on its own, got ${JSON.stringify(footerLine())}`);
+        assert.ok(footerLine().includes("x to kill"), `the key hints must come back, got ${JSON.stringify(footerLine())}`);
     });
 
     it("keeps the selection position when a cleared shell slides the next one up", async () => {
@@ -605,11 +607,12 @@ describe("shell inspector", () => {
         assert.deepEqual(
             shellManager.getAllJobsList().map((job) => job.id),
             ["job-a", "job-c"],
+            "clearing the middle shell must keep the order of the rest",
         );
         assert.deepEqual(visibleOutput(), ["output-c"], "the shell that took the cleared position must be selected");
         assert.ok(
             frame().lines.map(leftCell).some((cell) => cell.startsWith("› ● cmd-c")),
-            "the job list must highlight the shell that took the cleared position",
+            `the job list must highlight the shell that took the cleared position, got ${JSON.stringify(frame().lines.map(leftCell))}`,
         );
     });
 
@@ -620,8 +623,8 @@ describe("shell inspector", () => {
         press("j"); // select job-b, the last shell
         press("c");
 
-        assert.deepEqual(shellManager.getAllJobsList().map((job) => job.id), ["job-a"]);
-        assert.deepEqual(visibleOutput(), ["output-a"]);
+        assert.deepEqual(shellManager.getAllJobsList().map((job) => job.id), ["job-a"], "clearing the last shell must leave the earlier one");
+        assert.deepEqual(visibleOutput(), ["output-a"], "the pane must fall back to the surviving shell's output");
     });
 
     it("follows the newly selected shell's newest output after clearing a paused shell", async () => {
@@ -630,13 +633,13 @@ describe("shell inspector", () => {
 
         press("j"); // select job-b
         press(SHIFT_UP);
-        assert.equal(pausedMarker(), " · paused ↑1");
+        assert.equal(pausedMarker(), " · paused ↑1", "the selected shell must start paused");
 
         press("c");
 
-        assert.equal(shellManager.getJob("job-b")?.id, undefined);
+        assert.equal(shellManager.getJob("job-b")?.id, undefined, "c must clear the paused shell");
         assert.equal(pausedMarker(), undefined, "the newly selected shell must follow its newest output");
-        assert.equal(visibleOutput().at(-1), "a 40");
+        assert.equal(visibleOutput().at(-1), "a 40", "the pane must show the surviving shell's newest line");
     });
 
     it("keeps the inspector open on an empty frame after the last shell is cleared", async () => {
@@ -646,12 +649,12 @@ describe("shell inspector", () => {
 
         const lines = inspector.render(WIDTH);
 
-        assert.ok(lines.length > 0, "the overlay must keep drawing a frame");
+        assert.ok(lines.length > 0, `the overlay must keep drawing a frame, got ${lines.length} lines`);
         assert.ok(lines[0]!.includes("┌"), `the top border must stay: ${JSON.stringify(lines)}`);
         assert.ok(lines.at(-1)!.includes("└"), `the bottom border must stay: ${JSON.stringify(lines)}`);
-        assert.ok(!lines.some((line) => line.includes("› ●")), "no job may be listed");
+        assert.ok(!lines.some((line) => line.includes("› ●")), `no job may be listed, got ${JSON.stringify(lines)}`);
         assert.equal(closeRequests, 0, "clearing the last shell must not close the inspector");
-        assert.ok((lines.at(-2) ?? "").includes("Cleared echo done"), "the empty frame must still show the notice");
+        assert.ok((lines.at(-2) ?? "").includes("Cleared echo done"), `the empty frame must still show the notice, got ${JSON.stringify(lines.slice(-2))}`);
 
         // An empty list must not make the keys throw or resurrect a job.
         assert.doesNotThrow(() => {
@@ -662,8 +665,8 @@ describe("shell inspector", () => {
             press(END);
             press("x");
             press("c");
-        });
-        assert.equal(shellManager.getAllJobsList().length, 0);
+        }, "an empty job list must leave every key harmless");
+        assert.equal(shellManager.getAllJobsList().length, 0, "the keys must not resurrect a cleared shell");
 
         press("\x1b"); // Esc
         assert.equal(closeRequests, 1, "Esc must still close the empty inspector");
@@ -687,9 +690,9 @@ describe("shell inspector", () => {
 
         const narrow = inspector.render(70);
 
-        assert.ok(narrow.every((line) => visibleWidth(line) === 70), "every row must fit the narrow frame");
-        assert.ok(narrow.some((line) => line.includes("…")), "the pane must mark the truncation");
-        assert.deepEqual(shellManager.getScreenLines("job-1"), [wide]);
+        assert.ok(narrow.every((line) => visibleWidth(line) === 70), `every row must fit the narrow frame, got widths ${JSON.stringify(narrow.map((line) => visibleWidth(line)))}`);
+        assert.ok(narrow.some((line) => line.includes("…")), `the pane must mark the truncation, got ${JSON.stringify(narrow)}`);
+        assert.deepEqual(shellManager.getScreenLines("job-1"), [wide], "the emulator must keep the full logical line");
     });
 
     it("lists a labelled job by its label while the details keep the command", async () => {
@@ -706,7 +709,7 @@ describe("shell inspector", () => {
             .find((cell) => cell.startsWith("● "));
 
         assert.ok(listRow?.startsWith("› ● training run"), `unexpected job row: ${listRow}`);
-        assert.equal(detailsCommand, "● python train.py --config configs/long.json");
+        assert.equal(detailsCommand, "● python train.py --config configs/long.json", "the details pane must keep the full command");
     });
 
     it("normalizes a multiline command in both panes without changing the stored command", () => {
@@ -731,13 +734,13 @@ describe("shell inspector", () => {
 
         assert.ok(
             lines.every((line) => !/[\r\n\t]/.test(line)),
-            "each rendered element must contain one plain terminal row",
+            `each rendered element must contain one plain terminal row, got ${JSON.stringify(lines)}`,
         );
         assert.ok(listRow?.startsWith(`› ● ${normalized}`), `unexpected job row: ${listRow}`);
         assert.ok(listRow?.endsWith("running"), `unexpected job status: ${listRow}`);
-        assert.equal(detailsCommand, `● ${normalized}`);
-        assert.ok(!listRow?.includes("\x1b"), "terminal control sequences must not appear in the job row");
-        assert.ok(!detailsCommand?.includes("\x1b"), "terminal control sequences must not appear in the details command");
+        assert.equal(detailsCommand, `● ${normalized}`, "the details pane must show the same normalized command as the list");
+        assert.ok(!listRow?.includes("\x1b"), `terminal control sequences must not appear in the job row, got ${JSON.stringify(listRow)}`);
+        assert.ok(!detailsCommand?.includes("\x1b"), `terminal control sequences must not appear in the details command, got ${JSON.stringify(detailsCommand)}`);
         assert.equal(
             shellManager.getJob("job-1")?.command,
             rawCommand,

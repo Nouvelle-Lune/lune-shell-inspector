@@ -1,11 +1,13 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { shellManager } from "./shell-manager.ts";
 
-export function registerBackgroundShellNotifications(
-    pi: ExtensionAPI,
-): () => void {
+export function registerBackgroundShellNotifications(pi: ExtensionAPI): () => void {
     return shellManager.subscribe((event) => {
-        if (event.type !== "job-completed" && event.type !== "job-failed" && event.type !== "job-killed") {
+        if (
+            event.type !== "job-completed" &&
+            event.type !== "job-failed" &&
+            event.type !== "job-killed"
+        ) {
             return;
         }
         const job = shellManager.getJob(event.id);
@@ -20,9 +22,7 @@ export function registerBackgroundShellNotifications(
                 content: [
                     `Background shell ${job.id} ${job.status}.`,
                     `Command: ${job.command}`,
-                    job.exitCode === undefined
-                        ? undefined
-                        : `Exit code: ${job.exitCode}`,
+                    job.exitCode === undefined ? undefined : `Exit code: ${job.exitCode}`,
                     job.error ? `Error: ${job.error}` : undefined,
                     "",
                     "Output:",
@@ -44,5 +44,3 @@ export function registerBackgroundShellNotifications(
         );
     });
 }
-
-

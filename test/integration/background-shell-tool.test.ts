@@ -77,8 +77,12 @@ describe("lune-shell-inspector background_shell invocation", () => {
     it("lists nothing before any background shell was started", async () => {
         // Contract: an empty manager is reported as prose, not as an empty string that the model
         // would have to interpret; an explicit empty `jobs` array means the same as omitting it.
-        assert.equal(await inspect(inspector), "No background shells.");
-        assert.equal(await inspect(inspector, { jobs: [] }), "No background shells.");
+        assert.equal(await inspect(inspector), "No background shells.", "an empty manager must be reported as prose");
+        assert.equal(
+            await inspect(inspector, { jobs: [] }),
+            "No background shells.",
+            "an explicit empty jobs array must read like an omitted one",
+        );
     });
 
     it("lists every job in insertion order with its id, status and command", async () => {
@@ -103,6 +107,7 @@ describe("lune-shell-inspector background_shell invocation", () => {
                 "call-list-completed: completed - echo list-done",
                 "call-list-running: running - sleep 30",
             ].join("\n"),
+            "the list must follow insertion order with id, status and command",
         );
         assert.equal(
             await inspect(inspector, { jobs: [] }),
@@ -123,7 +128,7 @@ describe("lune-shell-inspector background_shell invocation", () => {
         await waitForJobSettled(jobId);
 
         const text = await inspect(inspector, { jobs: [{ jobID: jobId }] });
-        assert.equal(text, `call-status-only: completed - ${command}`);
+        assert.equal(text, `call-status-only: completed - ${command}`, "a status-only block must carry id, status and command");
         assert.equal(
             text.split("\n").length,
             1,
@@ -142,13 +147,13 @@ describe("lune-shell-inspector background_shell invocation", () => {
             toolCallId: "call-screen",
         });
         const settled = await waitForJobSettled(jobId);
-        assert.ok(settled.output.content.includes("\r"), "guard: the raw stream must carry the redraw");
+        assert.ok(settled.output.content.includes("\r"), `guard: the raw stream must carry the redraw, got ${JSON.stringify(settled.output.content.slice(0, 200))}`);
 
         const text = await inspect(inspector, { jobs: [{ jobID: jobId, includeOutput: true }] });
         const [statusLine, ...outputLines] = text.split("\n");
-        assert.equal(statusLine, `call-screen: completed - ${command}`);
-        assert.deepEqual(outputLines, ["progress 90%", "vt-done"]);
-        assert.ok(!text.includes("\r"), "the raw VT stream must not reach the model");
+        assert.equal(statusLine, `call-screen: completed - ${command}`, "the block must open with the status line");
+        assert.deepEqual(outputLines, ["progress 90%", "vt-done"], "the output must be the executed screen, not the raw stream");
+        assert.ok(!text.includes("\r"), `the raw VT stream must not reach the model, got ${JSON.stringify(text.slice(0, 200))}`);
     });
 
     it("marks a shell that has not printed anything yet", async () => {
@@ -161,7 +166,7 @@ describe("lune-shell-inspector background_shell invocation", () => {
         });
 
         const text = await inspect(inspector, { jobs: [{ jobID: jobId, includeOutput: true }] });
-        assert.equal(text, "call-silent: running - sleep 30\n(no output yet)");
+        assert.equal(text, "call-silent: running - sleep 30\n(no output yet)", "a requested but empty screen must be marked explicitly");
     });
 
     it("answers one block per requested shell and isolates unknown ids", async () => {
@@ -189,6 +194,7 @@ describe("lune-shell-inspector background_shell invocation", () => {
                 "call-mixed: completed - echo mixed-known",
                 "Unknown background shell: call-missing-with-output",
             ].join("\n\n"),
+            "each requested id must keep its own block in the order asked for",
         );
     });
 });

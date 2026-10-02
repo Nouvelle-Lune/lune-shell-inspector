@@ -88,13 +88,13 @@ describe("lune-shell-inspector background notifications", () => {
             });
 
             const settled = await waitForJobSettled(jobId);
-            assert.equal(settled.status, "completed");
+            assert.equal(settled.status, "completed", "the job must settle before it can notify");
             assert.equal(session.host.sendMessageCalls.length, 1, "one terminal event must notify once");
 
             const call = session.host.sendMessageCalls[0]!;
             const text = messageText(call);
 
-            assert.equal(call.message.customType, "background-shell-notification");
+            assert.equal(call.message.customType, "background-shell-notification", "the notification must use the extension's custom type");
             assert.equal(call.message.display, false, "the notification must not enter the transcript");
             assert.equal(call.options?.triggerTurn, true, "the agent must get a turn to read it");
             assert.equal(call.options?.deliverAs, "steer", "the notification must steer the running turn");
@@ -102,12 +102,12 @@ describe("lune-shell-inspector background notifications", () => {
                 shellJobId: jobId,
                 status: "completed",
                 exitCode: 0,
-            });
+            }, "the notification must identify the job and its outcome");
 
-            assert.ok(text.startsWith(`Background shell ${jobId} completed.`), text);
-            assert.ok(text.includes("Command: echo notify-done"), text);
-            assert.ok(text.includes("Exit code: 0"), text);
-            assert.ok(text.endsWith(`Output:\n${settled.output.content}`), text);
+            assert.ok(text.startsWith(`Background shell ${jobId} completed.`), `the notification must open with the job id and status: ${text}`);
+            assert.ok(text.includes("Command: echo notify-done"), `the notification must report the command: ${text}`);
+            assert.ok(text.includes("Exit code: 0"), `the notification must report the exit code: ${text}`);
+            assert.ok(text.endsWith(`Output:\n${settled.output.content}`), `the notification must end with the job output: ${text}`);
             assert.ok(!text.includes("undefined"), "absent optional fields must be omitted, not printed");
 
             // The detached execution reports its outcome in the same turn; after its promise has
@@ -127,15 +127,15 @@ describe("lune-shell-inspector background notifications", () => {
             });
 
             const settled = await waitForJobSettled(jobId);
-            assert.equal(settled.status, "failed");
-            assert.equal(session.host.sendMessageCalls.length, 1);
+            assert.equal(settled.status, "failed", "the timed-out job must fail before it notifies");
+            assert.equal(session.host.sendMessageCalls.length, 1, "a failed job must notify once");
 
             const text = messageText(session.host.sendMessageCalls[0]!);
 
-            assert.ok(text.startsWith(`Background shell ${jobId} failed.`), text);
-            assert.ok(text.includes("Error: timeout:1"), text);
+            assert.ok(text.startsWith(`Background shell ${jobId} failed.`), `the notification must open with the job id and status: ${text}`);
+            assert.ok(text.includes("Error: timeout:1"), `the notification must report the failure reason: ${text}`);
             assert.ok(!text.includes("Exit code:"), "a failed execution reports no process exit code");
-            assert.ok(!text.includes("undefined"), text);
+            assert.ok(!text.includes("undefined"), `absent optional fields must be omitted: ${text}`);
         });
     });
 
@@ -147,15 +147,15 @@ describe("lune-shell-inspector background notifications", () => {
                 toolCallId: "call-notify-killed",
             });
 
-            assert.equal(shellManager.settleJob(jobId, { type: "killed", error: "manual kill" }), true);
-            assert.equal(shellManager.getJob(jobId)?.controller.signal.aborted, true);
+            assert.equal(shellManager.settleJob(jobId, { type: "killed", error: "manual kill" }), true, "the explicit kill must be accepted");
+            assert.equal(shellManager.getJob(jobId)?.controller.signal.aborted, true, "the kill must abort the job's controller");
 
-            assert.equal(session.host.sendMessageCalls.length, 1);
+            assert.equal(session.host.sendMessageCalls.length, 1, "a killed job must notify once");
             const text = messageText(session.host.sendMessageCalls[0]!);
 
-            assert.ok(text.startsWith(`Background shell ${jobId} killed.`), text);
-            assert.ok(text.includes("Error: manual kill"), text);
-            assert.ok(!text.includes("undefined"), text);
+            assert.ok(text.startsWith(`Background shell ${jobId} killed.`), `the notification must open with the job id and status: ${text}`);
+            assert.ok(text.includes("Error: manual kill"), `the notification must report the kill reason: ${text}`);
+            assert.ok(!text.includes("undefined"), `absent optional fields must be omitted: ${text}`);
         });
     });
 
@@ -168,15 +168,15 @@ describe("lune-shell-inspector background notifications", () => {
             });
 
             const settled = await waitForJobSettled(jobId);
-            assert.equal(settled.status, "failed");
-            assert.equal(session.host.sendMessageCalls.length, 1);
+            assert.equal(settled.status, "failed", "the non-zero exit must settle as failed");
+            assert.equal(session.host.sendMessageCalls.length, 1, "a non-zero exit must notify once");
 
             const text = messageText(session.host.sendMessageCalls[0]!);
 
-            assert.ok(text.startsWith(`Background shell ${jobId} failed.`), text);
-            assert.ok(text.includes("Exit code: 7"), text);
-            assert.ok(text.includes("Error: Background shell exited with code 7"), text);
-            assert.ok(text.endsWith("Output:\npartial\n"), text);
+            assert.ok(text.startsWith(`Background shell ${jobId} failed.`), `the notification must open with the job id and status: ${text}`);
+            assert.ok(text.includes("Exit code: 7"), `the notification must report the exit code: ${text}`);
+            assert.ok(text.includes("Error: Background shell exited with code 7"), `the notification must report the failure reason: ${text}`);
+            assert.ok(text.endsWith("Output:\npartial\n"), `the notification must end with the output produced before the failure: ${text}`);
 
             await new Promise((resolve) => setTimeout(resolve, 300));
             assert.equal(session.host.sendMessageCalls.length, 1, "a failed execution must notify exactly once");
@@ -208,7 +208,7 @@ describe("lune-shell-inspector background notifications", () => {
                 shellJobId: jobId,
                 status: "killed",
                 exitCode: undefined,
-            });
+            }, "the teardown kill must identify the job and its outcome");
         });
     });
 
@@ -223,17 +223,17 @@ describe("lune-shell-inspector background notifications", () => {
             shellManager.settleJob("job-spilled", { type: "completed", exitCode: 0 });
 
             const path = shellManager.getJob("job-spilled")?.output.fullOutputPath;
-            assert.ok(path, "guard: the flood must have spilled");
+            assert.ok(path, `guard: the flood must have spilled, got ${String(path)}`);
 
-            assert.equal(session.host.sendMessageCalls.length, 1);
+            assert.equal(session.host.sendMessageCalls.length, 1, "a spilled job must notify once");
             const text = messageText(session.host.sendMessageCalls[0]!);
 
-            assert.ok(text.includes(`[Output truncated. Full output: ${path}]`), text);
-            assert.ok(text.includes("L2499"), "the newest line must reach the agent");
-            assert.ok(!text.includes("L0\n"), "the dropped head must not reach the agent");
-            assert.ok(!text.includes("[object Object]"), "the structured output must be rendered");
-            assert.ok(!text.includes("Showing last"), "the banner must not claim line numbers the counter cannot supply");
-            assert.ok(text.length < full.length, "the reported text must stay bounded");
+            assert.ok(text.includes(`[Output truncated. Full output: ${path}]`), `the notification must point at the spill file: ${text}`);
+            assert.ok(text.includes("L2499"), `the newest line must reach the agent, got ${JSON.stringify(text.slice(-200))}`);
+            assert.ok(!text.includes("L0\n"), `the dropped head must not reach the agent, got ${JSON.stringify(text.slice(0, 200))}`);
+            assert.ok(!text.includes("[object Object]"), `the structured output must be rendered, got ${JSON.stringify(text.slice(0, 400))}`);
+            assert.ok(!text.includes("Showing last"), `the banner must not claim line numbers the counter cannot supply, got ${JSON.stringify(text.slice(0, 200))}`);
+            assert.ok(text.length < full.length, `the reported text must stay bounded, reported ${text.length} vs full ${full.length} characters`);
 
             rmSync(path, { force: true });
         });
@@ -243,10 +243,10 @@ describe("lune-shell-inspector background notifications", () => {
         await withSession("notify-once", async (session) => {
             startJob("job-once", "echo once");
 
-            assert.equal(shellManager.settleJob("job-once", { type: "completed", exitCode: 0 }), true);
-            assert.equal(shellManager.settleJob("job-once", { type: "failed", error: "late" }), false);
+            assert.equal(shellManager.settleJob("job-once", { type: "completed", exitCode: 0 }), true, "the first settle must be accepted");
+            assert.equal(shellManager.settleJob("job-once", { type: "failed", error: "late" }), false, "a second settle must be refused");
 
-            assert.equal(session.host.sendMessageCalls.length, 1);
+            assert.equal(session.host.sendMessageCalls.length, 1, "the refused settle must not notify again");
         });
     });
 
@@ -299,32 +299,32 @@ describe("lune-shell-inspector background notifications", () => {
                 assert.doesNotThrow(() => {
                     settled = shellManager.settleJob(id, outcome);
                 }, "a throwing sendMessage must not fail the settle");
-                assert.equal(settled, true);
+                assert.equal(settled, true, "the settle must still be applied");
 
                 const job = shellManager.getJob(id)!;
-                assert.equal(job.status, status);
-                assert.ok(job.finishedAt !== undefined && job.finishedAt >= before);
+                assert.equal(job.status, status, "the settle outcome must be the job's status");
+                assert.ok(job.finishedAt !== undefined && job.finishedAt >= before, `the finish must be stamped after the settle, got ${String(job.finishedAt)}`);
                 assert.equal(job.lastActivityAt, job.finishedAt, "the finish must stay the last activity");
-                assert.equal(job.exitCode, exitCode);
-                assert.equal(job.error, error);
+                assert.equal(job.exitCode, exitCode, "the settle must carry its exit code through");
+                assert.equal(job.error, error, "the settle must carry its reason through");
                 assert.equal(job.output.content, "kept\n", "a delivery failure must not roll the output back");
-                assert.equal(job.output.totalLines, 1);
-                assert.equal(job.output.totalBytes, Buffer.byteLength("kept\n"));
+                assert.equal(job.output.totalLines, 1, "the retained tail must stay intact");
+                assert.equal(job.output.totalBytes, Buffer.byteLength("kept\n"), "the byte count must stay intact");
             }
 
             assert.equal(sends, 3, "every terminal event must have attempted exactly one send");
-            assert.equal(session.host.sendMessageCalls.length, 3);
+            assert.equal(session.host.sendMessageCalls.length, 3, "every attempt must be recorded on the host");
             assert.deepEqual(shellManager.getAllJobsStatusStat(), {
                 runningCount: 0,
                 completedCount: 1,
                 failedCount: 1,
                 killedCount: 1,
-            });
+            }, "every outcome must reach its own counter despite the throwing transport");
 
             // Later manager work keeps going through the same stale transport.
             startJob("state-after-stale", "echo again");
-            assert.equal(shellManager.settleJob("state-after-stale", { type: "completed", exitCode: 0 }), true);
-            assert.equal(sends, 4);
+            assert.equal(shellManager.settleJob("state-after-stale", { type: "completed", exitCode: 0 }), true, "a later settle must still be accepted");
+            assert.equal(sends, 4, "the later settle must attempt its own send");
         } finally {
             await session.host.emit("session_shutdown", session.ctx);
             removeTempWorkDir(workDir);
@@ -342,7 +342,7 @@ describe("lune-shell-inspector background notifications", () => {
         const unsubscribe = registerBackgroundShellNotifications(pi);
         startJob("job-before", "echo before");
         shellManager.settleJob("job-before", { type: "completed", exitCode: 0 });
-        assert.equal(calls.length, 1);
+        assert.equal(calls.length, 1, "the completed job must notify before the unsubscribe");
 
         unsubscribe();
         startJob("job-after", "echo after");
@@ -398,7 +398,7 @@ describe("lune-shell-inspector background notifications", () => {
             shellManager.appendOutput("burst-b", "b-out\n");
             shellManager.appendOutput("burst-c", "c-out\n");
 
-            assert.equal(shellManager.settleJob("burst-a", { type: "completed", exitCode: 0 }), true);
+            assert.equal(shellManager.settleJob("burst-a", { type: "completed", exitCode: 0 }), true, "the completed settle must be accepted");
             assert.equal(
                 shellManager.settleJob("burst-b", {
                     type: "failed",
@@ -406,15 +406,16 @@ describe("lune-shell-inspector background notifications", () => {
                     exitCode: 3,
                 }),
                 true,
+                "the failed settle must be accepted",
             );
-            assert.equal(shellManager.settleJob("burst-c", { type: "killed", error: "user" }), true);
+            assert.equal(shellManager.settleJob("burst-c", { type: "killed", error: "user" }), true, "the killed settle must be accepted");
 
             assert.deepEqual(shellManager.getAllJobsStatusStat(), {
                 runningCount: 0,
                 completedCount: 1,
                 failedCount: 1,
                 killedCount: 1,
-            });
+            }, "the burst must move each counter exactly once");
             assert.equal(session.host.sendMessageCalls.length, 3, "every settled job must notify exactly once");
 
             const byId = new Map(
@@ -425,12 +426,12 @@ describe("lune-shell-inspector background notifications", () => {
             );
             assert.deepEqual([...byId.keys()].sort(), ["burst-a", "burst-b", "burst-c"], "no job may be lost or duplicated");
 
-            assert.equal((byId.get("burst-a")?.message.details as { status?: string }).status, "completed");
-            assert.equal((byId.get("burst-b")?.message.details as { status?: string }).status, "failed");
-            assert.equal((byId.get("burst-c")?.message.details as { status?: string }).status, "killed");
-            assert.ok(messageText(byId.get("burst-a")!).endsWith("Output:\na-out\n"), messageText(byId.get("burst-a")!));
-            assert.ok(messageText(byId.get("burst-b")!).endsWith("Output:\nb-out\n"), messageText(byId.get("burst-b")!));
-            assert.ok(messageText(byId.get("burst-c")!).endsWith("Output:\nc-out\n"), messageText(byId.get("burst-c")!));
+            assert.equal((byId.get("burst-a")?.message.details as { status?: string }).status, "completed", "the completed job's own notification must say completed");
+            assert.equal((byId.get("burst-b")?.message.details as { status?: string }).status, "failed", "the failed job's own notification must say failed");
+            assert.equal((byId.get("burst-c")?.message.details as { status?: string }).status, "killed", "the killed job's own notification must say killed");
+            assert.ok(messageText(byId.get("burst-a")!).endsWith("Output:\na-out\n"), `the completed notification must carry its own output: ${messageText(byId.get("burst-a")!)}`);
+            assert.ok(messageText(byId.get("burst-b")!).endsWith("Output:\nb-out\n"), `the failed notification must carry its own output: ${messageText(byId.get("burst-b")!)}`);
+            assert.ok(messageText(byId.get("burst-c")!).endsWith("Output:\nc-out\n"), `the killed notification must carry its own output: ${messageText(byId.get("burst-c")!)}`);
         });
     });
 

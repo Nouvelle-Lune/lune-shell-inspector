@@ -64,11 +64,11 @@ describe("ShellManager", () => {
         it("exposes one shared manager instance for the extension", () => {
             // Contract: the module exports a ready-made ShellManager so every session handler and
             // background tool call in one pi process observes the same job list.
-            assert.ok(shellManager instanceof ShellManager, "shellManager must be a ShellManager instance");
+            assert.ok(shellManager instanceof ShellManager, `shellManager must be a ShellManager instance, got ${String(shellManager)}`);
 
             shellManager.clearAllJobs();
             startRunningJob(shellManager, { id: "singleton-job" });
-            assert.equal(shellManager.getJob("singleton-job")?.status, "running");
+            assert.equal(shellManager.getJob("singleton-job")?.status, "running", "the shared manager must store the job");
             shellManager.clearAllJobs();
         });
     });
@@ -84,18 +84,18 @@ describe("ShellManager", () => {
             const after = Date.now();
 
             const job = manager.getJob("job-a");
-            assert.ok(job, "expected the started job");
-            assert.equal(job.id, "job-a");
-            assert.equal(job.command, "npm test");
-            assert.equal(job.cwd, "/work");
-            assert.equal(job.status, "running");
-            assert.equal(job.output.content, "");
-            assert.equal(job.finishedAt, undefined);
-            assert.equal(job.exitCode, undefined);
-            assert.equal(job.error, undefined);
+            assert.ok(job, `expected the started job, got ${String(job)}`);
+            assert.equal(job.id, "job-a", "the job must be keyed by the requested id");
+            assert.equal(job.command, "npm test", "the job must keep the requested command");
+            assert.equal(job.cwd, "/work", "the job must keep the requested cwd");
+            assert.equal(job.status, "running", "a started job must be running");
+            assert.equal(job.output.content, "", "a started job must have no output yet");
+            assert.equal(job.finishedAt, undefined, "a running job must have no finish timestamp");
+            assert.equal(job.exitCode, undefined, "a running job must have no exit code");
+            assert.equal(job.error, undefined, "a running job must have no error");
             assert.equal(job.controller, controller, "the job must keep the caller's controller");
             assert.equal(job.startedAt, job.lastActivityAt, "start and last activity share the creation timestamp");
-            assert.ok(job.startedAt >= before && job.startedAt <= after, "startedAt must be the wall clock at creation");
+            assert.ok(job.startedAt >= before && job.startedAt <= after, `startedAt must be the wall clock at creation, got ${job.startedAt} outside [${before}, ${after}]`);
         });
 
         it("rejects a duplicate id without touching the existing job", () => {
@@ -104,7 +104,7 @@ describe("ShellManager", () => {
             const manager = new ShellManager();
             startRunningJob(manager, { id: "job-a", command: "first" });
 
-            assert.throws(() => startRunningJob(manager, { id: "job-a", command: "second" }), /Shell job already exists: job-a/);
+            assert.throws(() => startRunningJob(manager, { id: "job-a", command: "second" }), /Shell job already exists: job-a/, "a duplicate id must be refused loudly");
             assert.equal(manager.getJob("job-a")?.command, "first", "the original job must stay untouched");
         });
 
@@ -120,7 +120,7 @@ describe("ShellManager", () => {
 
             startRunningJob(manager);
 
-            assert.deepEqual(seen, ["notified"]);
+            assert.deepEqual(seen, ["notified"], "starting a job must notify once");
             assert.equal(jobsDuringNotification, 1, "the job must already be stored when listeners run");
         });
     });
@@ -134,17 +134,17 @@ describe("ShellManager", () => {
             manager.appendOutput("job-a", "line 1\n");
             const startedAt = manager.getJob("job-a")?.startedAt;
 
-            assert.equal(manager.settleJob("job-a", completed(0)), true);
+            assert.equal(manager.settleJob("job-a", completed(0)), true, "the settle must be accepted");
 
             const job = manager.getJob("job-a");
-            assert.ok(job);
-            assert.equal(job.status, "completed");
+            assert.ok(job, "the settled job must stay stored");
+            assert.equal(job.status, "completed", "the settle must store the completion");
             assert.equal(job.output.content, "line 1\n", "settling must keep the streamed output");
-            assert.equal(job.exitCode, 0);
-            assert.equal(job.startedAt, startedAt);
-            assert.ok(job.finishedAt !== undefined && job.finishedAt >= job.startedAt);
+            assert.equal(job.exitCode, 0, "the completion must keep its exit code");
+            assert.equal(job.startedAt, startedAt, "settling must not restamp the start");
+            assert.ok(job.finishedAt !== undefined && job.finishedAt >= job.startedAt, "the finish must be stamped after the start");
             assert.equal(job.lastActivityAt, job.finishedAt, "the finish is the last activity");
-            assert.equal(job.error, undefined);
+            assert.equal(job.error, undefined, "a completed job must have no error");
         });
 
         it("records the outcome it is told without interpreting the exit code", () => {
@@ -153,23 +153,23 @@ describe("ShellManager", () => {
             const manager = new ShellManager();
             startRunningJob(manager, { id: "job-a" });
 
-            assert.equal(manager.settleJob("job-a", completed(3)), true);
+            assert.equal(manager.settleJob("job-a", completed(3)), true, "a completion with a non-zero code must be accepted");
 
             const completedJob = manager.getJob("job-a");
-            assert.ok(completedJob);
-            assert.equal(completedJob.status, "completed");
-            assert.equal(completedJob.exitCode, 3);
-            assert.equal(completedJob.error, undefined);
+            assert.ok(completedJob, "the completed job must stay stored");
+            assert.equal(completedJob.status, "completed", "the manager must store the given outcome verbatim");
+            assert.equal(completedJob.exitCode, 3, "the manager must not reinterpret the exit code");
+            assert.equal(completedJob.error, undefined, "a completion must record no error");
 
             startRunningJob(manager, { id: "job-b" });
 
-            assert.equal(manager.settleJob("job-b", failed("Background shell exited with code 3", 3)), true);
+            assert.equal(manager.settleJob("job-b", failed("Background shell exited with code 3", 3)), true, "the failure must be accepted");
 
             const failedJob = manager.getJob("job-b");
-            assert.ok(failedJob);
-            assert.equal(failedJob.status, "failed");
-            assert.equal(failedJob.exitCode, 3);
-            assert.equal(failedJob.error, "Background shell exited with code 3");
+            assert.ok(failedJob, "the failed job must stay stored");
+            assert.equal(failedJob.status, "failed", "the manager must store the given outcome verbatim");
+            assert.equal(failedJob.exitCode, 3, "the failure must keep its exit code");
+            assert.equal(failedJob.error, "Background shell exited with code 3", "the failure must keep its reason");
         });
 
         it("leaves exitCode undefined for a completion without one", () => {
@@ -178,7 +178,7 @@ describe("ShellManager", () => {
 
             manager.settleJob("job-a", completed());
 
-            assert.equal(manager.getJob("job-a")?.exitCode, undefined);
+            assert.equal(manager.getJob("job-a")?.exitCode, undefined, "a completion without an exit code must stay undefined");
         });
 
         it("fails a running job with the error and optional exit code", () => {
@@ -188,16 +188,16 @@ describe("ShellManager", () => {
             startRunningJob(manager, { id: "job-a" });
             manager.appendOutput("job-a", "partial output");
 
-            assert.equal(manager.settleJob("job-a", failed("Command exited with code 3", 3)), true);
+            assert.equal(manager.settleJob("job-a", failed("Command exited with code 3", 3)), true, "the failure must be accepted");
 
             const job = manager.getJob("job-a");
-            assert.ok(job);
-            assert.equal(job.status, "failed");
-            assert.equal(job.error, "Command exited with code 3");
-            assert.equal(job.exitCode, 3);
+            assert.ok(job, "the failed job must stay stored");
+            assert.equal(job.status, "failed", "the settle must store the failure");
+            assert.equal(job.error, "Command exited with code 3", "the failure must keep its reason");
+            assert.equal(job.exitCode, 3, "the failure must keep its exit code");
             assert.equal(job.output.content, "partial output", "a failure must not discard the streamed output");
-            assert.ok(job.finishedAt !== undefined);
-            assert.equal(job.lastActivityAt, job.finishedAt);
+            assert.ok(job.finishedAt !== undefined, "the failure must stamp a finish");
+            assert.equal(job.lastActivityAt, job.finishedAt, "the finish is the last activity");
         });
 
         it("leaves exitCode undefined for a failure without one", () => {
@@ -208,7 +208,7 @@ describe("ShellManager", () => {
 
             manager.settleJob("job-a", failed("spawn failed"));
 
-            assert.equal(manager.getJob("job-a")?.exitCode, undefined);
+            assert.equal(manager.getJob("job-a")?.exitCode, undefined, "an error without an exit code must stay distinguishable from exit code 0");
         });
 
         it("kills a running job by aborting its controller", () => {
@@ -218,19 +218,19 @@ describe("ShellManager", () => {
             const manager = new ShellManager();
             const controller = startRunningJob(manager, { id: "job-a" });
             manager.appendOutput("job-a", "before kill");
-            assert.equal(controller.signal.aborted, false);
+            assert.equal(controller.signal.aborted, false, "the controller must be live before the kill");
 
-            assert.equal(manager.settleJob("job-a", killed("timeout:1")), true);
+            assert.equal(manager.settleJob("job-a", killed("timeout:1")), true, "the kill must be accepted");
 
             const job = manager.getJob("job-a");
-            assert.ok(job);
-            assert.equal(job.status, "killed");
-            assert.equal(job.error, "timeout:1");
-            assert.equal(job.exitCode, undefined);
+            assert.ok(job, "the killed job must stay stored");
+            assert.equal(job.status, "killed", "the settle must store the kill");
+            assert.equal(job.error, "timeout:1", "the kill must keep its reason");
+            assert.equal(job.exitCode, undefined, "a killed job must have no process exit code");
             assert.equal(controller.signal.aborted, true, "killing a job must abort its controller");
             assert.equal(job.output.content, "before kill", "a kill must not discard the streamed output");
-            assert.ok(job.finishedAt !== undefined);
-            assert.equal(job.lastActivityAt, job.finishedAt);
+            assert.ok(job.finishedAt !== undefined, "the kill must stamp a finish");
+            assert.equal(job.lastActivityAt, job.finishedAt, "the finish is the last activity");
         });
 
         it("uses a default reason when a kill carries none", () => {
@@ -239,7 +239,7 @@ describe("ShellManager", () => {
 
             manager.settleJob("job-a", killed());
 
-            assert.equal(manager.getJob("job-a")?.error, "killed");
+            assert.equal(manager.getJob("job-a")?.error, "killed", "a reasonless kill must get the default reason");
         });
 
         it("refuses an unknown id without an event or a counter change", () => {
@@ -251,7 +251,7 @@ describe("ShellManager", () => {
                 seen.push("notified");
             });
 
-            assert.equal(manager.settleJob("missing", completed(0)), false);
+            assert.equal(manager.settleJob("missing", completed(0)), false, "an unknown id must be refused");
 
             assert.deepEqual(seen, [], "a refused settle must not notify subscribers");
             assert.deepEqual(manager.getAllJobsStatusStat(), {
@@ -259,7 +259,7 @@ describe("ShellManager", () => {
                 completedCount: 0,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "a refused settle must not move a counter");
         });
 
         it("is idempotent: a second settle is refused and the first outcome survives", () => {
@@ -267,29 +267,29 @@ describe("ShellManager", () => {
             // overwrite the recorded outcome or move the counters twice.
             const manager = new ShellManager();
             startRunningJob(manager, { id: "job-a" });
-            assert.equal(manager.settleJob("job-a", completed(3)), true);
+            assert.equal(manager.settleJob("job-a", completed(3)), true, "the first settle must be accepted");
             const settledAt = manager.getJob("job-a")?.finishedAt;
             const seen: string[] = [];
             manager.subscribe(() => {
                 seen.push("notified");
             });
 
-            assert.equal(manager.settleJob("job-a", failed("late")), false);
-            assert.equal(manager.settleJob("job-a", killed("late")), false);
+            assert.equal(manager.settleJob("job-a", failed("late")), false, "a second settle must be refused");
+            assert.equal(manager.settleJob("job-a", killed("late")), false, "a third settle must be refused too");
 
             const job = manager.getJob("job-a");
-            assert.ok(job);
+            assert.ok(job, "the settled job must stay stored");
             assert.equal(job.status, "completed", "the first outcome must survive");
-            assert.equal(job.exitCode, 3);
-            assert.equal(job.error, undefined);
-            assert.equal(job.finishedAt, settledAt);
+            assert.equal(job.exitCode, 3, "a refused settle must not change the exit code");
+            assert.equal(job.error, undefined, "a refused settle must not record a reason");
+            assert.equal(job.finishedAt, settledAt, "a refused settle must not restamp the finish");
             assert.deepEqual(seen, [], "refused settles must not re-render the dock");
             assert.deepEqual(manager.getAllJobsStatusStat(), {
                 runningCount: 0,
                 completedCount: 1,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "refused settles must not move a counter");
         });
 
         it("keeps a killed job when a later completion arrives", () => {
@@ -297,8 +297,8 @@ describe("ShellManager", () => {
             startRunningJob(manager, { id: "job-a" });
             manager.settleJob("job-a", killed("manual"));
 
-            assert.equal(manager.settleJob("job-a", completed(0)), false);
-            assert.equal(manager.getJob("job-a")?.status, "killed");
+            assert.equal(manager.settleJob("job-a", completed(0)), false, "a settled job must refuse the late completion");
+            assert.equal(manager.getJob("job-a")?.status, "killed", "the first kill must stay the outcome");
         });
 
         it("refuses the agent's killed outcome on a settled job and keeps the first outcome", () => {
@@ -311,7 +311,7 @@ describe("ShellManager", () => {
             for (const outcome of outcomes) {
                 const manager = new ShellManager();
                 startRunningJob(manager, { id: "job-a" });
-                assert.equal(manager.settleJob("job-a", outcome), true);
+                assert.equal(manager.settleJob("job-a", outcome), true, `the initial settle for ${outcome.type} must be accepted`);
                 const settled = manager.getJob("job-a")!;
                 const stats = manager.getAllJobsStatusStat();
                 const events: string[] = [];
@@ -372,14 +372,14 @@ describe("ShellManager", () => {
                 assert.doesNotThrow(() => {
                     settled = manager.settleJob(id, outcome);
                 }, `a throwing listener must not fail the ${status} settle`);
-                assert.equal(settled, true);
+                assert.equal(settled, true, "the settle must still be applied");
 
                 const job = manager.getJob(id)!;
-                assert.equal(job.status, status);
-                assert.ok(job.finishedAt !== undefined);
-                assert.equal(job.lastActivityAt, job.finishedAt);
+                assert.equal(job.status, status, "the settle must store the requested outcome");
+                assert.ok(job.finishedAt !== undefined, "the settle must stamp a finish despite the throwing listener");
+                assert.equal(job.lastActivityAt, job.finishedAt, "the finish is the last activity");
                 assert.deepEqual(seen, [event], `the later listener must still see ${event}`);
-                assert.deepEqual(manager.getAllJobsStatusStat(), stats);
+                assert.deepEqual(manager.getAllJobsStatusStat(), stats, "the throwing listener must not affect the counters");
                 assert.equal(manager.settleJob(id, completed(0)), false, "a second settle must stay refused");
                 assert.deepEqual(manager.getAllJobsStatusStat(), stats, "the refused settle must not move a counter");
             }
@@ -400,16 +400,16 @@ describe("ShellManager", () => {
             manager.clearAllJobs();
 
             assert.equal(runningController.signal.aborted, true, "clearing must abort a running job's process");
-            assert.deepEqual(manager.getAllJobsList(), []);
-            assert.deepEqual(manager.getRunningJobsList(), []);
-            assert.deepEqual(manager.getCompletedJobsList(), []);
-            assert.equal(manager.getJob("running"), undefined);
+            assert.deepEqual(manager.getAllJobsList(), [], "the clear must drop every job");
+            assert.deepEqual(manager.getRunningJobsList(), [], "no running job may survive the clear");
+            assert.deepEqual(manager.getCompletedJobsList(), [], "no completed job may survive the clear");
+            assert.equal(manager.getJob("running"), undefined, "a cleared job must not be queryable");
             assert.deepEqual(manager.getAllJobsStatusStat(), {
                 runningCount: 0,
                 completedCount: 0,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "the clear must reset every counter");
         });
 
         it("aborts the running jobs and leaves settled ones alone", () => {
@@ -422,8 +422,8 @@ describe("ShellManager", () => {
 
             manager.clearAllJobs();
 
-            assert.equal(running.signal.aborted, true);
-            assert.equal(completedController.signal.aborted, false);
+            assert.equal(running.signal.aborted, true, "the clear must abort a running job's process");
+            assert.equal(completedController.signal.aborted, false, "the clear must not abort a settled job's controller");
         });
 
         it("notifies subscribers even when it clears nothing", () => {
@@ -437,7 +437,7 @@ describe("ShellManager", () => {
 
             manager.clearAllJobs();
 
-            assert.deepEqual(seen, [0]);
+            assert.deepEqual(seen, [0], "an empty clear must still reach the dock");
         });
     });
 
@@ -456,23 +456,23 @@ describe("ShellManager", () => {
                 jobsDuringNotification = manager.getAllJobsList().length;
             });
 
-            assert.equal(manager.clearJob("job-a"), true);
+            assert.equal(manager.clearJob("job-a"), true, "the clear must be accepted");
 
-            assert.equal(manager.getJob("job-a")?.id, undefined);
-            assert.deepEqual(manager.getAllJobsList(), []);
+            assert.equal(manager.getJob("job-a")?.id, undefined, "the cleared job must leave the manager");
+            assert.deepEqual(manager.getAllJobsList(), [], "the cleared job must leave the list");
             assert.deepEqual(manager.getAllJobsStatusStat(), {
                 runningCount: 0,
                 completedCount: 0,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "the cleared job must leave every counter");
             assert.deepEqual(
                 events,
                 [{ type: "job-cleared", id: "job-a" }],
                 "clearing must emit one event naming the cleared job",
             );
             assert.equal(jobsDuringNotification, 0, "the job must already be gone when listeners run");
-            assert.throws(() => manager.getJobOutput("job-a"), /Unknown shell job: job-a/);
+            assert.throws(() => manager.getJobOutput("job-a"), /Unknown shell job: job-a/, "a cleared job's output must be gone");
         });
 
         it("clears a completed, failed or killed job and moves only that job's counter", () => {
@@ -485,29 +485,29 @@ describe("ShellManager", () => {
             startRunningJob(manager, { id: "killed" });
             manager.settleJob("killed", killed("manual"));
 
-            assert.equal(manager.clearJob("failed"), true);
+            assert.equal(manager.clearJob("failed"), true, "the clear must be accepted");
             assert.deepEqual(manager.getAllJobsStatusStat(), {
                 runningCount: 1,
                 completedCount: 1,
                 failedCount: 0,
                 killedCount: 1,
-            });
+            }, "clearing the failed job must move only the failed counter");
 
-            assert.equal(manager.clearJob("completed"), true);
+            assert.equal(manager.clearJob("completed"), true, "the clear must be accepted");
             assert.deepEqual(manager.getAllJobsStatusStat(), {
                 runningCount: 1,
                 completedCount: 0,
                 failedCount: 0,
                 killedCount: 1,
-            });
+            }, "clearing the completed job must move only the completed counter");
 
-            assert.equal(manager.clearJob("killed"), true);
+            assert.equal(manager.clearJob("killed"), true, "the clear must be accepted");
             assert.deepEqual(manager.getAllJobsStatusStat(), {
                 runningCount: 1,
                 completedCount: 0,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "clearing the killed job must move only the killed counter");
             assert.deepEqual(manager.getAllJobsList().map((job) => job.id), ["running"], "the running job must survive");
         });
 
@@ -519,11 +519,11 @@ describe("ShellManager", () => {
             const seen: string[] = [];
             manager.subscribe((event) => seen.push(event.type));
 
-            assert.equal(manager.clearJob("job-a"), false);
+            assert.equal(manager.clearJob("job-a"), false, "a running job must be refused");
 
             const job = manager.getJob("job-a");
-            assert.ok(job);
-            assert.equal(job.status, "running");
+            assert.ok(job, "the refused job must stay stored");
+            assert.equal(job.status, "running", "a refused clear must not change the status");
             assert.equal(controller.signal.aborted, false, "a refused clear must not abort the process");
             assert.deepEqual(seen, [], "a refused clear must not notify subscribers");
             assert.deepEqual(manager.getAllJobsStatusStat(), {
@@ -531,7 +531,7 @@ describe("ShellManager", () => {
                 completedCount: 0,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "a refused clear must not move a counter");
         });
 
         it("refuses an unknown id without notifying subscribers", () => {
@@ -539,15 +539,15 @@ describe("ShellManager", () => {
             const seen: string[] = [];
             manager.subscribe((event) => seen.push(event.type));
 
-            assert.equal(manager.clearJob("missing"), false);
+            assert.equal(manager.clearJob("missing"), false, "an unknown id must be refused");
 
-            assert.deepEqual(seen, []);
+            assert.deepEqual(seen, [], "an unknown id must not notify subscribers");
             assert.deepEqual(manager.getAllJobsStatusStat(), {
                 runningCount: 0,
                 completedCount: 0,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "an unknown id must not move a counter");
         });
 
         it("is idempotent: a second clear of the same job is refused", () => {
@@ -559,8 +559,8 @@ describe("ShellManager", () => {
             const seen: string[] = [];
             manager.subscribe((event) => seen.push(event.type));
 
-            assert.equal(manager.clearJob("job-a"), true);
-            assert.equal(manager.clearJob("job-a"), false);
+            assert.equal(manager.clearJob("job-a"), true, "the first clear must be accepted");
+            assert.equal(manager.clearJob("job-a"), false, "the second clear must be refused");
 
             assert.deepEqual(seen, ["job-cleared"], "the second clear must not emit again");
             assert.equal(manager.getJob("job-b")?.status, "completed", "another settled job must survive");
@@ -569,7 +569,7 @@ describe("ShellManager", () => {
                 completedCount: 1,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "only the cleared job's counter may drop");
         });
 
         it("leaves the settled job it does not clear readable and unaborted", async () => {
@@ -585,8 +585,8 @@ describe("ShellManager", () => {
 
             assert.equal(manager.getJob("job-a")?.id, undefined, "the targeted job must be gone");
             assert.equal(clearedController.signal.aborted, false, "clearing a settled job must not abort anything");
-            assert.equal(manager.getJobOutput("job-b"), "kept output\n");
-            assert.deepEqual(await screenLines(manager, "job-b"), ["kept output"]);
+            assert.equal(manager.getJobOutput("job-b"), "kept output\n", "the untouched job's output must stay readable");
+            assert.deepEqual(await screenLines(manager, "job-b"), ["kept output"], "the untouched job's screen must stay readable");
         });
 
         it("clears the job and keeps later listeners running when an earlier listener throws", () => {
@@ -603,17 +603,17 @@ describe("ShellManager", () => {
             let cleared = false;
             assert.doesNotThrow(() => {
                 cleared = manager.clearJob("job-a");
-            });
+            }, "a throwing listener must not fail the clear");
 
-            assert.equal(cleared, true);
-            assert.equal(manager.getJob("job-a")?.id, undefined);
-            assert.deepEqual(seen, ["job-cleared"]);
+            assert.equal(cleared, true, "the clear must still be applied");
+            assert.equal(manager.getJob("job-a")?.id, undefined, "the cleared job must leave the manager");
+            assert.deepEqual(seen, ["job-cleared"], "the later listener must still see the event");
             assert.deepEqual(manager.getAllJobsStatusStat(), {
                 runningCount: 0,
                 completedCount: 0,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "the throwing listener must not affect the counters");
         });
     });
 
@@ -631,11 +631,11 @@ describe("ShellManager", () => {
             manager.appendOutput("job-a", "chunk 3");
 
             const job = manager.getJob("job-a");
-            assert.ok(job);
-            assert.equal(job.output.content, "chunk 1\nchunk 2\nchunk 3");
-            assert.equal(job.status, "running");
-            assert.equal(job.startedAt, startedAt);
-            assert.ok(firstActivity !== undefined && job.lastActivityAt >= firstActivity);
+            assert.ok(job, "the streaming job must stay stored");
+            assert.equal(job.output.content, "chunk 1\nchunk 2\nchunk 3", "every chunk must be appended in arrival order");
+            assert.equal(job.status, "running", "appending output must not settle the job");
+            assert.equal(job.startedAt, startedAt, "appending output must not restamp the start");
+            assert.ok(firstActivity !== undefined && job.lastActivityAt >= firstActivity, "the activity timestamp must move forward");
             assert.equal(job.finishedAt, undefined, "streaming output must not finish the job");
         });
 
@@ -646,7 +646,7 @@ describe("ShellManager", () => {
 
             manager.appendOutput("job-a", "");
 
-            assert.equal(manager.getJob("job-a")?.output.content, "kept");
+            assert.equal(manager.getJob("job-a")?.output.content, "kept", "an empty chunk must not change the output");
         });
 
         it("notifies subscribers once per chunk", () => {
@@ -660,7 +660,7 @@ describe("ShellManager", () => {
             manager.appendOutput("job-a", "one");
             manager.appendOutput("job-a", "two");
 
-            assert.deepEqual(seen, ["notified", "notified"]);
+            assert.deepEqual(seen, ["notified", "notified"], "each appended chunk must notify once");
         });
 
         it("appends the chunk and keeps later listeners running when a listener throws", async () => {
@@ -676,15 +676,15 @@ describe("ShellManager", () => {
                 seen.push(event.type);
             });
 
-            assert.doesNotThrow(() => manager.appendOutput("job-a", "one\ntwo\n"));
+            assert.doesNotThrow(() => manager.appendOutput("job-a", "one\ntwo\n"), "a throwing listener must not fail the append");
             const job = manager.getJob("job-a")!;
-            assert.equal(job.output.content, "one\ntwo\n");
-            assert.equal(job.output.totalLines, 2);
-            assert.equal(job.output.totalBytes, Buffer.byteLength("one\ntwo\n"));
+            assert.equal(job.output.content, "one\ntwo\n", "the chunk must be committed despite the throwing listener");
+            assert.equal(job.output.totalLines, 2, "the line total must count the committed chunk");
+            assert.equal(job.output.totalBytes, Buffer.byteLength("one\ntwo\n"), "the byte total must count the committed chunk");
             assert.deepEqual(seen, ["output-updated"], "the later listener must still see the event");
             assert.deepEqual(await screenLines(manager, "job-a"), ["one", "two"], "the emulator must receive the chunk");
 
-            assert.doesNotThrow(() => manager.appendOutput("job-a", "three"));
+            assert.doesNotThrow(() => manager.appendOutput("job-a", "three"), "later appends must still work");
             assert.equal(job.output.content, "one\ntwo\nthree", "later output must still be appendable");
         });
 
@@ -692,7 +692,7 @@ describe("ShellManager", () => {
             // Contract: appendOutput is the running-only writer, so a late chunk cannot corrupt a
             // settled job's final output - whichever outcome settled it.
             const manager = new ShellManager();
-            assert.throws(() => manager.appendOutput("missing", "late"), /Unknown shell job: missing/);
+            assert.throws(() => manager.appendOutput("missing", "late"), /Unknown shell job: missing/, "an unknown id must be refused loudly");
 
             startRunningJob(manager, { id: "completed" });
             manager.appendOutput("completed", "final");
@@ -705,18 +705,21 @@ describe("ShellManager", () => {
             assert.throws(
                 () => manager.appendOutput("completed", "late"),
                 /Shell job "completed" is not running: completed/,
+                "a completed job must refuse late output",
             );
             assert.throws(
                 () => manager.appendOutput("failed", "late"),
                 /Shell job "failed" is not running: failed/,
+                "a failed job must refuse late output",
             );
             assert.throws(
                 () => manager.appendOutput("killed", "late"),
                 /Shell job "killed" is not running: killed/,
+                "a killed job must refuse late output",
             );
-            assert.equal(manager.getJob("completed")?.output.content, "final");
-            assert.equal(manager.getJob("failed")?.output.content, "");
-            assert.equal(manager.getJob("killed")?.output.content, "");
+            assert.equal(manager.getJob("completed")?.output.content, "final", "a refused chunk must not change the completed output");
+            assert.equal(manager.getJob("failed")?.output.content, "", "a refused chunk must not reach the failed job");
+            assert.equal(manager.getJob("killed")?.output.content, "", "a refused chunk must not reach the killed job");
         });
     });
 
@@ -751,9 +754,9 @@ describe("ShellManager", () => {
             manager.appendOutput("job-a", "two\n");
 
             const job = manager.getJob("job-a")!;
-            assert.equal(job.output.content, "one\ntwo\n");
-            assert.equal(job.output.truncated, false);
-            assert.equal(job.output.fullOutputPath, undefined);
+            assert.equal(job.output.content, "one\ntwo\n", "a small stream must stay in memory");
+            assert.equal(job.output.truncated, false, "a small stream must not be truncated");
+            assert.equal(job.output.fullOutputPath, undefined, "a small stream must not spill a file");
         });
 
         it("concatenates chunks exactly as they arrive, across chunk boundaries", () => {
@@ -764,7 +767,7 @@ describe("ShellManager", () => {
             manager.appendOutput("job-a", "\nline ");
             manager.appendOutput("job-a", "2\nline 3");
 
-            assert.equal(manager.getJob("job-a")!.output.content, "line 1\nline 2\nline 3");
+            assert.equal(manager.getJob("job-a")!.output.content, "line 1\nline 2\nline 3", "chunks must concatenate across boundaries");
         });
 
         it("counts totalBytes in UTF-8 bytes, not in string length", () => {
@@ -779,8 +782,8 @@ describe("ShellManager", () => {
             const job = manager.getJob("job-a")!;
             const full = chunks.join("");
 
-            assert.equal(job.output.content, full);
-            assert.equal(job.output.totalBytes, Buffer.byteLength(full));
+            assert.equal(job.output.content, full, "the multibyte stream must be kept verbatim");
+            assert.equal(job.output.totalBytes, Buffer.byteLength(full), "the byte total must count UTF-8 bytes");
             assert.notEqual(job.output.totalBytes, full.length, "multibyte chunks must differ from code-unit length");
         });
 
@@ -814,12 +817,12 @@ describe("ShellManager", () => {
             const path = spillPath(manager, "job-a");
             const full = `${head}\noverflow`;
 
-            assert.equal(job.output.truncated, true);
+            assert.equal(job.output.truncated, true, "crossing the line limit must spill the stream");
             assert.equal(job.output.fullOutputPath, path, "the job keeps the file it created");
             assert.equal(readFileSync(path, "utf8"), full, "the spill file starts with everything appended so far");
             assert.equal(job.output.content, truncateTail(full).content, "the retained tail matches pi's truncation");
-            assert.equal(job.output.totalLines, full.match(/\n/g)!.length);
-            assert.equal(job.output.totalBytes, Buffer.byteLength(full));
+            assert.equal(job.output.totalLines, full.match(/\n/g)!.length, "the line total must count the whole stream");
+            assert.equal(job.output.totalBytes, Buffer.byteLength(full), "the byte total must count the whole stream");
         });
 
         it("appends every later chunk to the same file instead of spilling again", () => {
@@ -838,7 +841,7 @@ describe("ShellManager", () => {
             assert.equal(job.output.fullOutputPath, path, "the file must not be replaced");
             assert.equal(readFileSync(path, "utf8"), full, "the file must grow with every chunk");
             assert.equal(job.output.content, truncateTail(full).content, "memory keeps only the bounded tail");
-            assert.ok(!job.output.content.includes("L0\n"), "the dropped head must not stay in memory");
+            assert.ok(!job.output.content.includes("L0\n"), `the dropped head must not stay in memory, got ${JSON.stringify(job.output.content.slice(0, 100))}`);
         });
 
         it("retains exactly pi's tail truncation at the line limit", () => {
@@ -853,8 +856,8 @@ describe("ShellManager", () => {
             spillPath(manager, "job-a");
 
             assert.equal(expected.truncatedBy, "lines", "guard: this stream must cross the line limit first");
-            assert.equal(job.output.content, expected.content);
-            assert.equal(job.output.content.split("\n").length, DEFAULT_MAX_LINES);
+            assert.equal(job.output.content, expected.content, "the retained tail must match pi's truncation");
+            assert.equal(job.output.content.split("\n").length, DEFAULT_MAX_LINES, "the retained tail must stay at the line limit");
         });
 
         it("spills on the byte limit even when the line count stays far below the line limit", () => {
@@ -862,7 +865,7 @@ describe("ShellManager", () => {
             startRunningJob(manager, { id: "job-a" });
             // 200 lines x 120 CJK characters: ~72KB of UTF-8 in only 200 lines.
             const full = Array.from({ length: 200 }, () => "中".repeat(120)).join("\n");
-            assert.ok(full.split("\n").length < DEFAULT_MAX_LINES, "guard: the line limit must not be the trigger");
+            assert.ok(full.split("\n").length < DEFAULT_MAX_LINES, `guard: the line limit must not be the trigger, got ${full.split("\n").length} lines`);
 
             manager.appendOutput("job-a", full);
 
@@ -871,10 +874,10 @@ describe("ShellManager", () => {
             const path = spillPath(manager, "job-a");
 
             assert.equal(expected.truncatedBy, "bytes", "guard: the byte limit must be the trigger");
-            assert.equal(job.output.truncated, true);
-            assert.equal(job.output.content, expected.content);
-            assert.equal(job.output.totalBytes, Buffer.byteLength(full));
-            assert.equal(readFileSync(path, "utf8"), full);
+            assert.equal(job.output.truncated, true, "crossing the byte limit must spill the stream");
+            assert.equal(job.output.content, expected.content, "the retained tail must match pi's truncation");
+            assert.equal(job.output.totalBytes, Buffer.byteLength(full), "the byte total must count the whole stream");
+            assert.equal(readFileSync(path, "utf8"), full, "the spill file must hold the whole stream");
         });
 
         it("writes a post-spill chunk to the file even when the retained tail does not change", () => {
@@ -890,7 +893,7 @@ describe("ShellManager", () => {
             manager.appendOutput("job-a", "yz");
 
             assert.equal(statSync(path).size, before + 2, "every chunk must be appended verbatim");
-            assert.ok(readFileSync(path, "utf8").endsWith("yz"));
+            assert.ok(readFileSync(path, "utf8").endsWith("yz"), `the file must end with the newest chunk, got ${JSON.stringify(readFileSync(path, "utf8").slice(-20))}`);
         });
 
         it("returns the plain content when nothing was dropped", () => {
@@ -898,7 +901,7 @@ describe("ShellManager", () => {
             startRunningJob(manager, { id: "job-a" });
             manager.appendOutput("job-a", "hello\nworld\n");
 
-            assert.equal(manager.getJobOutput("job-a"), "hello\nworld\n");
+            assert.equal(manager.getJobOutput("job-a"), "hello\nworld\n", "an untruncated job must report its plain output");
         });
 
         it("returns the bounded tail behind a spill banner when output was truncated", () => {
@@ -911,10 +914,10 @@ describe("ShellManager", () => {
             const reported = manager.getJobOutput("job-a");
             const lines = reported.split("\n");
 
-            assert.equal(lines.at(0), `[Output truncated. Full output: ${path}]`);
+            assert.equal(lines.at(0), `[Output truncated. Full output: ${path}]`, "the reported text must open with the spill footer");
             assert.equal(lines.at(1), `L${full.split("\n").length - DEFAULT_MAX_LINES}`, "the tail starts at the retained line");
             assert.equal(lines.at(-1), `L${full.split("\n").length - 1}`, "the newest line must reach the reader");
-            assert.ok(!reported.includes("[object Object]"), "the structured output must be rendered, not stringified");
+            assert.ok(!reported.includes("[object Object]"), `the structured output must be rendered, not stringified, got ${JSON.stringify(reported.slice(-200))}`);
         });
 
         it("reports an empty string for a job that never received a chunk", () => {
@@ -922,8 +925,8 @@ describe("ShellManager", () => {
             startRunningJob(manager, { id: "job-a" });
             manager.settleJob("job-a", completed(0));
 
-            assert.equal(manager.getJobOutput("job-a"), "");
-            assert.equal(manager.getJob("job-a")!.output.fullOutputPath, undefined);
+            assert.equal(manager.getJobOutput("job-a"), "", "a job without output must report an empty string");
+            assert.equal(manager.getJob("job-a")!.output.fullOutputPath, undefined, "a job without output must not have spilled");
         });
 
         it("gives each spilled job its own file", () => {
@@ -938,9 +941,9 @@ describe("ShellManager", () => {
             const a = spillPath(manager, "job-a");
             const b = spillPath(manager, "job-b");
 
-            assert.notEqual(a, b);
-            assert.equal(readFileSync(a, "utf8"), full);
-            assert.equal(readFileSync(b, "utf8"), `${full}\nB`);
+            assert.notEqual(a, b, "each spilled job must get its own file");
+            assert.equal(readFileSync(a, "utf8"), full, "A's file must hold A's stream");
+            assert.equal(readFileSync(b, "utf8"), `${full}\nB`, "B's file must hold B's stream");
         });
 
         it("leaves spill files on disk when the jobs are cleared", () => {
@@ -967,20 +970,21 @@ describe("ShellManager", () => {
             const path = spillPath(manager, "job-a");
             const sizeBeforeSettle = statSync(path).size;
 
-            assert.equal(manager.settleJob("job-a", completed(0)), true);
+            assert.equal(manager.settleJob("job-a", completed(0)), true, "the settle must be accepted");
 
             const job = manager.getJob("job-a")!;
             assert.equal(existsSync(path), true, "settling must not remove the spill file");
             assert.equal(statSync(path).size, sizeBeforeSettle, "settling must not rewrite the file");
             assert.equal(readFileSync(path, "utf8"), full, "the file must still hold every byte");
-            assert.equal(job.output.fullOutputPath, path);
-            assert.equal(job.output.truncated, true);
+            assert.equal(job.output.fullOutputPath, path, "settling must keep the spill path");
+            assert.equal(job.output.truncated, true, "settling must keep the truncation flag");
             assert.equal(
                 manager.getJobOutput("job-a"),
                 `[Output truncated. Full output: ${path}]\n${truncateTail(full).content}`,
+                "the read path must keep reporting the bounded tail behind the banner",
             );
 
-            assert.throws(() => manager.appendOutput("job-a", "late\n"), /is not running/);
+            assert.throws(() => manager.appendOutput("job-a", "late\n"), /is not running/, "a settled job must refuse late output");
             assert.equal(statSync(path).size, sizeBeforeSettle, "a refused late chunk must not reach the file");
         });
 
@@ -1008,16 +1012,16 @@ describe("ShellManager", () => {
 
             const fullA = headA + aChunks.join("");
             const fullB = headB + bChunks.join("");
-            assert.equal(readFileSync(pathA, "utf8"), fullA);
-            assert.equal(readFileSync(pathB, "utf8"), fullB);
-            assert.ok(!readFileSync(pathA, "utf8").includes("b-1"), "A's file must not receive B's chunks");
-            assert.ok(!readFileSync(pathB, "utf8").includes("a-1"), "B's file must not receive A's chunks");
-            assert.ok(manager.getJobOutput("job-a").includes("a-3"), "A's newest chunk must stay readable");
-            assert.ok(manager.getJobOutput("job-b").includes("b-3"), "B's newest chunk must stay readable");
-            assert.equal(manager.getJob("job-a")!.output.totalBytes, Buffer.byteLength(fullA));
-            assert.equal(manager.getJob("job-b")!.output.totalBytes, Buffer.byteLength(fullB));
-            assert.equal(manager.getJob("job-a")!.output.totalLines, (fullA.match(/\n/g) ?? []).length);
-            assert.equal(manager.getJob("job-b")!.output.totalLines, (fullB.match(/\n/g) ?? []).length);
+            assert.equal(readFileSync(pathA, "utf8"), fullA, "A's file must hold every A chunk in order");
+            assert.equal(readFileSync(pathB, "utf8"), fullB, "B's file must hold every B chunk in order");
+            assert.ok(!readFileSync(pathA, "utf8").includes("b-1"), `A's file must not receive B's chunks, got ${JSON.stringify(readFileSync(pathA, "utf8"))}`);
+            assert.ok(!readFileSync(pathB, "utf8").includes("a-1"), `B's file must not receive A's chunks, got ${JSON.stringify(readFileSync(pathB, "utf8"))}`);
+            assert.ok(manager.getJobOutput("job-a").includes("a-3"), `A's newest chunk must stay readable, got ${JSON.stringify(manager.getJobOutput("job-a"))}`);
+            assert.ok(manager.getJobOutput("job-b").includes("b-3"), `B's newest chunk must stay readable, got ${JSON.stringify(manager.getJobOutput("job-b"))}`);
+            assert.equal(manager.getJob("job-a")!.output.totalBytes, Buffer.byteLength(fullA), "A's byte total must count its own stream");
+            assert.equal(manager.getJob("job-b")!.output.totalBytes, Buffer.byteLength(fullB), "B's byte total must count its own stream");
+            assert.equal(manager.getJob("job-a")!.output.totalLines, (fullA.match(/\n/g) ?? []).length, "A's line total must count its own stream");
+            assert.equal(manager.getJob("job-b")!.output.totalLines, (fullB.match(/\n/g) ?? []).length, "B's line total must count its own stream");
         });
     });
 
@@ -1029,7 +1033,7 @@ describe("ShellManager", () => {
             startRunningJob(manager, { id: "job-a" });
             manager.appendOutput("job-a", "\x1b[32mprogress 1%\x1b[0m\rprogress 50%\r\x1b[Kprogress 100%\n");
 
-            assert.deepEqual(await screenLines(manager, "job-a"), ["progress 100%"]);
+            assert.deepEqual(await screenLines(manager, "job-a"), ["progress 100%"], "the screen must be the executed result, not the raw stream");
         });
 
         it("has no lines before anything was written", async () => {
@@ -1037,7 +1041,7 @@ describe("ShellManager", () => {
             const manager = new ShellManager();
             startRunningJob(manager, { id: "job-a" });
 
-            assert.deepEqual(await screenLines(manager, "job-a"), []);
+            assert.deepEqual(await screenLines(manager, "job-a"), [], "a job without output must have no screen lines");
         });
 
         it("keeps plain lines in order and adds no line for a trailing newline", async () => {
@@ -1046,7 +1050,7 @@ describe("ShellManager", () => {
             manager.appendOutput("job-a", "hello world\n");
             manager.appendOutput("job-a", "second\nthird\n");
 
-            assert.deepEqual(await screenLines(manager, "job-a"), ["hello world", "second", "third"]);
+            assert.deepEqual(await screenLines(manager, "job-a"), ["hello world", "second", "third"], "plain lines must stay in order with no extra row");
         });
 
         it("collapses carriage-return redraws into the current line", async () => {
@@ -1056,7 +1060,7 @@ describe("ShellManager", () => {
             startRunningJob(manager, { id: "job-a" });
             manager.appendOutput("job-a", "progress 1%\rprogress 50%\rprogress 100%");
 
-            assert.deepEqual(await screenLines(manager, "job-a"), ["progress 100%"]);
+            assert.deepEqual(await screenLines(manager, "job-a"), ["progress 100%"], "carriage-return redraws must collapse into one line");
         });
 
         it("applies erase-line and keeps a partial last line", async () => {
@@ -1064,7 +1068,7 @@ describe("ShellManager", () => {
             startRunningJob(manager, { id: "job-a" });
             manager.appendOutput("job-a", "downloading 100%\x1b[2K\rdone");
 
-            assert.deepEqual(await screenLines(manager, "job-a"), ["done"]);
+            assert.deepEqual(await screenLines(manager, "job-a"), ["done"], "erase-line must clear the previous content");
         });
 
         it("applies cursor movement to the screen", async () => {
@@ -1074,7 +1078,7 @@ describe("ShellManager", () => {
             startRunningJob(manager, { id: "job-a" });
             manager.appendOutput("job-a", "abcdef\x1b[3DXY\nsecond\x1b[A!\x1b[7Cend");
 
-            assert.deepEqual(await screenLines(manager, "job-a"), ["abcXYf!       end", "second"]);
+            assert.deepEqual(await screenLines(manager, "job-a"), ["abcXYf!       end", "second"], "cursor movement must be applied to the screen");
         });
 
         it("strips SGR styling and window-title sequences", async () => {
@@ -1086,6 +1090,7 @@ describe("ShellManager", () => {
             assert.deepEqual(
                 await screenLines(manager, "job-a"),
                 ["red plain bold on blue", "after title"],
+                "styling must be stripped while the text stays",
             );
         });
 
@@ -1104,8 +1109,8 @@ describe("ShellManager", () => {
             startRunningJob(single, { id: "job-b" });
             single.appendOutput("job-b", chunks.join(""));
 
-            assert.deepEqual(await screenLines(split, "job-a"), ["progress 2%"]);
-            assert.deepEqual(await screenLines(split, "job-a"), await screenLines(single, "job-b"));
+            assert.deepEqual(await screenLines(split, "job-a"), ["progress 2%"], "a sequence split across chunks must still execute");
+            assert.deepEqual(await screenLines(split, "job-a"), await screenLines(single, "job-b"), "chunked and single writes must produce the same screen");
         });
 
         it("keeps wide characters and emoji intact", async () => {
@@ -1116,6 +1121,7 @@ describe("ShellManager", () => {
             assert.deepEqual(
                 await screenLines(manager, "job-a"),
                 ["進捗: 100% ✓", "emoji: 🚀 done"],
+                "wide characters and emoji must survive the screen",
             );
         });
 
@@ -1129,7 +1135,7 @@ describe("ShellManager", () => {
             const straddling = "s".repeat(119) + "漢" + "end";
             manager.appendOutput("job-a", `${wide}\n${straddling}\nnext\n`);
 
-            assert.deepEqual(await screenLines(manager, "job-a"), [wide, straddling, "next"]);
+            assert.deepEqual(await screenLines(manager, "job-a"), [wide, straddling, "next"], "wrapped rows must rejoin while explicit breaks stay");
         });
 
         it("drops the blank rows the screen pads itself with but keeps blank output lines", async () => {
@@ -1137,7 +1143,7 @@ describe("ShellManager", () => {
             startRunningJob(manager, { id: "job-a" });
             manager.appendOutput("job-a", "first\n\nsecond\n\n");
 
-            assert.deepEqual(await screenLines(manager, "job-a"), ["first", "", "second"]);
+            assert.deepEqual(await screenLines(manager, "job-a"), ["first", "", "second"], "padding must be dropped while blank output lines stay");
         });
 
         it("keeps the raw stream on the screen no matter what the retained tail drops", async () => {
@@ -1151,10 +1157,10 @@ describe("ShellManager", () => {
             const lines = await screenLines(manager, "job-a");
             const job = manager.getJob("job-a")!;
 
-            assert.equal(lines.at(-1), `L${total - 1}`);
+            assert.equal(lines.at(-1), `L${total - 1}`, "the newest line must stay on the screen");
             assert.ok(
                 lines.length > job.output.content.split("\n").length,
-                "the screen must reach lines the retained tail dropped",
+                `the screen must reach lines the retained tail dropped, got ${lines.length} screen lines vs ${job.output.content.split("\n").length} retained`,
             );
         });
 
@@ -1169,8 +1175,8 @@ describe("ShellManager", () => {
             manager.appendOutput("job-a", "-more\n");
             manager.appendOutput("job-b", "-more\n");
 
-            assert.deepEqual(await screenLines(manager, "job-a"), ["AAA-more"]);
-            assert.deepEqual(await screenLines(manager, "job-b"), ["BBB-more"]);
+            assert.deepEqual(await screenLines(manager, "job-a"), ["AAA-more"], "A's screen must receive only A's chunks");
+            assert.deepEqual(await screenLines(manager, "job-b"), ["BBB-more"], "B's screen must receive only B's chunks");
         });
 
         it("keeps the screen of a settled job readable", async () => {
@@ -1178,10 +1184,10 @@ describe("ShellManager", () => {
             startRunningJob(manager, { id: "job-a" });
             manager.appendOutput("job-a", "suite 1 ok\n");
 
-            assert.equal(manager.settleJob("job-a", completed(3)), true);
+            assert.equal(manager.settleJob("job-a", completed(3)), true, "the settle must be accepted");
 
-            assert.deepEqual(await screenLines(manager, "job-a"), ["suite 1 ok"]);
-            assert.throws(() => manager.appendOutput("job-a", "late"), /is not running/);
+            assert.deepEqual(await screenLines(manager, "job-a"), ["suite 1 ok"], "a settled job's screen must stay readable");
+            assert.throws(() => manager.appendOutput("job-a", "late"), /is not running/, "a settled job must refuse late output");
         });
 
         it("bounds the screen history and the retained tail while the complete stream is spilled", async () => {
@@ -1205,7 +1211,7 @@ describe("ShellManager", () => {
             );
             assert.notEqual(lines.at(0), "L0", "the dropped lines must be the oldest ones");
 
-            assert.equal(job.output.truncated, true);
+            assert.equal(job.output.truncated, true, "the flood must have spilled");
             assert.equal(job.output.content.split("\n").length, DEFAULT_MAX_LINES, "the retained tail is bounded");
             assert.equal(job.output.totalLines, total - 1, "the totals still count the whole stream");
             assert.equal(readFileSync(job.output.fullOutputPath!, "utf8"), full, "the spill file holds every byte");
@@ -1223,13 +1229,13 @@ describe("ShellManager", () => {
 
             const lines = await screenLines(manager, "job-a");
 
-            assert.equal(lines.length, 500);
-            assert.equal(lines.at(0), "line 0");
-            assert.equal(lines.at(-1), "line 499");
+            assert.equal(lines.length, 500, "every small write must produce its line");
+            assert.equal(lines.at(0), "line 0", "the first small write must be first");
+            assert.equal(lines.at(-1), "line 499", "the last small write must be last");
         });
 
         it("rejects an unknown id", () => {
-            assert.throws(() => new ShellManager().getScreenLines("missing"), /Unknown shell job: missing/);
+            assert.throws(() => new ShellManager().getScreenLines("missing"), /Unknown shell job: missing/, "an unknown id must be refused loudly");
         });
     });
 
@@ -1243,10 +1249,10 @@ describe("ShellManager", () => {
                 completedCount: 0,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "a fresh manager must start with empty counters");
 
             startRunningJob(manager, { id: "running" });
-            assert.equal(manager.getAllJobsStatusStat().runningCount, 1);
+            assert.equal(manager.getAllJobsStatusStat().runningCount, 1, "starting a job must move the running counter");
 
             startRunningJob(manager, { id: "completed" });
             manager.settleJob("completed", completed(0));
@@ -1260,7 +1266,7 @@ describe("ShellManager", () => {
                 completedCount: 1,
                 failedCount: 1,
                 killedCount: 1,
-            });
+            }, "each settle must move its own job into the matching counter");
         });
 
         it("exposes the live counters through the public field and a copy through the getter", () => {
@@ -1269,25 +1275,25 @@ describe("ShellManager", () => {
             const manager = new ShellManager();
             startRunningJob(manager, { id: "job-a" });
 
-            assert.equal(manager.jobsStatusStat.runningCount, 1);
+            assert.equal(manager.jobsStatusStat.runningCount, 1, "the public field must stay live");
 
             const snapshot = manager.getAllJobsStatusStat();
             snapshot.runningCount = 99;
             snapshot.completedCount = 99;
 
             assert.equal(manager.jobsStatusStat.runningCount, 1, "the getter must return a copy");
-            assert.equal(manager.getAllJobsStatusStat().completedCount, 0);
+            assert.equal(manager.getAllJobsStatusStat().completedCount, 0, "writing to the snapshot must not reach the manager");
         });
     });
 
     describe("queries", () => {
         it("returns undefined for an unknown job and the stored job for a known one", () => {
             const manager = new ShellManager();
-            assert.equal(manager.getJob("missing"), undefined);
+            assert.equal(manager.getJob("missing"), undefined, "an unknown job must be undefined");
 
             startRunningJob(manager, { id: "job-a", command: "echo a" });
 
-            assert.equal(manager.getJob("job-a")?.command, "echo a");
+            assert.equal(manager.getJob("job-a")?.command, "echo a", "a known job must be returned");
         });
 
         it("lists jobs in insertion order and running/completed jobs only in the same order", () => {
@@ -1302,14 +1308,17 @@ describe("ShellManager", () => {
             assert.deepEqual(
                 manager.getAllJobsList().map((job) => job.id),
                 ["first", "second", "third"],
+                "the full list must keep insertion order",
             );
             assert.deepEqual(
                 manager.getRunningJobsList().map((job) => job.id),
                 ["second"],
+                "the running list must keep insertion order",
             );
             assert.deepEqual(
                 manager.getCompletedJobsList().map((job) => job.id),
                 ["first", "third"],
+                "the completed list must keep insertion order",
             );
         });
 
@@ -1322,7 +1331,7 @@ describe("ShellManager", () => {
             const job = manager.getJob("job-a") as ShellJob;
             job.output.content = "written through the reference";
 
-            assert.equal(manager.getAllJobsList().at(0)?.output.content, "written through the reference");
+            assert.equal(manager.getAllJobsList().at(0)?.output.content, "written through the reference", "a write through the returned job must be visible to everyone");
         });
     });
 
@@ -1338,7 +1347,7 @@ describe("ShellManager", () => {
             unsubscribe();
             startRunningJob(manager, { id: "after" });
 
-            assert.deepEqual(seen, ["notified"]);
+            assert.deepEqual(seen, ["notified"], "only the first start may notify");
             assert.doesNotThrow(() => unsubscribe(), "unsubscribing twice must be harmless");
         });
 
@@ -1355,7 +1364,7 @@ describe("ShellManager", () => {
             manager.subscribe(listener);
             startRunningJob(manager);
 
-            assert.equal(calls, 1);
+            assert.equal(calls, 1, "a listener registered twice must still run once");
         });
 
         it("notifies every listener in registration order", () => {
@@ -1370,7 +1379,7 @@ describe("ShellManager", () => {
 
             startRunningJob(manager);
 
-            assert.deepEqual(order, ["first", "second"]);
+            assert.deepEqual(order, ["first", "second"], "listeners must run in registration order");
         });
 
         it("isolates a throwing listener so later listeners still receive every event", () => {
@@ -1389,9 +1398,9 @@ describe("ShellManager", () => {
                 seen.push(`C:${event.type}`);
             });
 
-            assert.doesNotThrow(() => startRunningJob(manager, { id: "job-a" }));
-            assert.doesNotThrow(() => manager.appendOutput("job-a", "chunk\n"));
-            assert.doesNotThrow(() => manager.settleJob("job-a", completed(0)));
+            assert.doesNotThrow(() => startRunningJob(manager, { id: "job-a" }), "a throwing listener must not fail the start");
+            assert.doesNotThrow(() => manager.appendOutput("job-a", "chunk\n"), "a throwing listener must not fail the append");
+            assert.doesNotThrow(() => manager.settleJob("job-a", completed(0)), "a throwing listener must not fail the settle");
 
             assert.deepEqual(seen, [
                 "B:job-started",
@@ -1402,15 +1411,15 @@ describe("ShellManager", () => {
                 "C:job-completed",
             ], "every listener after the throwing one must receive every event");
             const job = manager.getJob("job-a")!;
-            assert.equal(job.status, "completed");
-            assert.equal(job.output.content, "chunk\n");
-            assert.equal(job.exitCode, 0);
+            assert.equal(job.status, "completed", "the settle must be applied despite the throwing listener");
+            assert.equal(job.output.content, "chunk\n", "the output must be committed despite the throwing listener");
+            assert.equal(job.exitCode, 0, "the outcome must be stored despite the throwing listener");
             assert.deepEqual(manager.getAllJobsStatusStat(), {
                 runningCount: 0,
                 completedCount: 1,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "the counters must move despite the throwing listener");
         });
 
         it("visits a listener added during a notification in the same emit", () => {
@@ -1435,7 +1444,7 @@ describe("ShellManager", () => {
             assert.deepEqual(seen, ["first", "added"], "the live Set iteration must reach the new listener");
 
             manager.settleJob("job-1", completed(0));
-            assert.deepEqual(seen, ["first", "added", "first", "added"]);
+            assert.deepEqual(seen, ["first", "added", "first", "added"], "both listeners must keep receiving every event");
         });
     });
 });

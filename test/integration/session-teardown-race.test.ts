@@ -116,7 +116,7 @@ describe("lune-shell-inspector teardown races", () => {
             await new Promise((resolve) => setTimeout(resolve, 50));
 
             assert.equal(settleEvents.length, 1, `the job must settle once, saw ${settleEvents.join(", ")}`);
-            assert.deepEqual(shellManager.getAllJobsList(), []);
+            assert.deepEqual(shellManager.getAllJobsList(), [], "shutdown must leave no job behind");
             const stats = shellManager.getAllJobsStatusStat();
             const settled = stats.completedCount + stats.failedCount + stats.killedCount + stats.runningCount;
             assert.equal(settled, 0, "a cleared manager must count nothing");
@@ -131,20 +131,20 @@ describe("lune-shell-inspector teardown races", () => {
                 ctx: session.ctx,
                 toolCallId: "race-reject",
             });
-            assert.equal(shellManager.getJob(jobId)!.status, "running");
+            assert.equal(shellManager.getJob(jobId)!.status, "running", "the shell must be running before teardown");
 
             await session.host.emit("session_shutdown", session.ctx);
 
             // The runner's abort rejection lands after the shutdown already killed and dropped the job.
             await new Promise((resolve) => setTimeout(resolve, 100));
-            assert.equal(shellManager.settleJob(jobId, { type: "killed", error: "aborted" }), false);
-            assert.equal(shellManager.settleJob(jobId, { type: "completed", exitCode: 0 }), false);
+            assert.equal(shellManager.settleJob(jobId, { type: "killed", error: "aborted" }), false, "a settle after teardown must be refused");
+            assert.equal(shellManager.settleJob(jobId, { type: "completed", exitCode: 0 }), false, "a later settle must be refused too");
             assert.deepEqual(shellManager.getAllJobsStatusStat(), {
                 runningCount: 0,
                 completedCount: 0,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "refused settles must not move any counter");
         });
     });
 
@@ -178,7 +178,7 @@ describe("lune-shell-inspector teardown races", () => {
                 // Any chunk that was still buffered must be refused, not crash the process.
                 await failures.settle();
                 failures.assertEmpty("a chunk arriving after teardown must not escape as a process error");
-                assert.deepEqual(shellManager.getAllJobsList(), []);
+                assert.deepEqual(shellManager.getAllJobsList(), [], "the cleared flood job must stay gone");
             } finally {
                 failures.stop();
             }
@@ -207,11 +207,11 @@ describe("lune-shell-inspector teardown races", () => {
                 completedCount: 0,
                 failedCount: 0,
                 killedCount: 0,
-            });
+            }, "a teardown kill leaves no counter behind once the job is dropped");
             const snapshot = session.host.appendEntryCalls.at(-1);
-            assert.equal(snapshot?.customType, "lune-shell-view-status");
+            assert.equal(snapshot?.customType, "lune-shell-view-status", "shutdown must persist the final shell snapshot");
             const jobs = (snapshot?.data as { jobs: Array<{ id: string; status: string }> }).jobs;
-            assert.deepEqual(jobs.map((job) => [job.id, job.status]), [["race-abort-path", "killed"]]);
+            assert.deepEqual(jobs.map((job) => [job.id, job.status]), [["race-abort-path", "killed"]], "the snapshot must record the shell as killed");
         });
     });
 
@@ -250,7 +250,7 @@ describe("lune-shell-inspector teardown races", () => {
                     completedCount: 0,
                     failedCount: 0,
                     killedCount: 0,
-                });
+                }, "a late rejection must not move any counter");
             } finally {
                 unsubscribe();
             }
@@ -298,7 +298,7 @@ describe("lune-shell-inspector teardown races", () => {
                         completedCount: 0,
                         failedCount: 0,
                         killedCount: 0,
-                    });
+                    }, "the dropped job must leave no counter behind");
 
                     // Buffered chunks keep arriving from the killed process; the runner's onData guard
                     // has to refuse them without throwing, appending, or creating new state.
@@ -313,7 +313,7 @@ describe("lune-shell-inspector teardown races", () => {
                         completedCount: 0,
                         failedCount: 0,
                         killedCount: 0,
-                    });
+                    }, "a late chunk must not revive a counter");
                 } finally {
                     unsubscribe();
                 }

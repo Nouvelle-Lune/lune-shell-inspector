@@ -8,9 +8,10 @@
  * for them - while an explicit user kill through the inspector still notifies (covered by
  * `test/integration/inspector-kill.test.ts`).
  *
- * These tests drive the real extension and pi's own session events through `test/harness.ts`. The
- * desired contract for the tree kill is currently expected to fail: the notification listener is
- * still subscribed while `session_before_tree` runs, so today the lifecycle kill notifies.
+ * These tests drive the real extension and pi's own session events through `test/harness.ts`. A
+ * lifecycle kill has to be silent even though the kill itself emits terminal events: the extension
+ * removes the notification listener around the `clearAllJobs()` call and re-registers it afterwards,
+ * and `session_shutdown` removes it for good before clearing.
  */
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
@@ -86,7 +87,7 @@ describe("lune-shell-inspector lifecycle notifications", () => {
                 toolCallId: "call-tree-kill",
             });
             const running = shellManager.getJob(jobId)!;
-            assert.equal(running.status, "running");
+            assert.equal(running.status, "running", "the shell must be running before the tree move");
 
             await session.host.emit("session_before_tree", session.ctx, treePreparation(sessionLog));
 
@@ -117,15 +118,15 @@ describe("lune-shell-inspector lifecycle notifications", () => {
 
             const restored = shellManager.getJob(jobId);
             assert.ok(restored, "the branch's snapshot must restore the killed shell");
-            assert.equal(restored.status, "killed");
-            assert.equal(restored.error, "pi session shutdown");
+            assert.equal(restored.status, "killed", "the restored shell must keep its killed status");
+            assert.equal(restored.error, "pi session shutdown", "the snapshot must keep the lifecycle kill reason");
             assert.equal(restored.controller.signal.aborted, false, "a restored job is inert state");
             assert.deepEqual(shellManager.getAllJobsStatusStat(), {
                 runningCount: 0,
                 completedCount: 0,
                 failedCount: 0,
                 killedCount: 1,
-            });
+            }, "the restored branch must count the killed shell");
         } finally {
             await session.host.emit("session_shutdown", session.ctx);
             removeTempWorkDir(workDir);
@@ -146,7 +147,7 @@ describe("lune-shell-inspector lifecycle notifications", () => {
                     ctx: session.ctx,
                     toolCallId: id,
                 });
-                assert.equal(shellManager.getJob(id)?.status, "running");
+                assert.equal(shellManager.getJob(id)?.status, "running", "every shell must be running before the tree move");
                 controllers.push(shellManager.getJob(id)!.controller);
             }
 
@@ -158,20 +159,20 @@ describe("lune-shell-inspector lifecycle notifications", () => {
                 "every running shell must be stopped",
             );
             const snapshot = lastSnapshot(session.host);
-            assert.ok(snapshot);
+            assert.ok(snapshot, "the lifecycle kill must persist a snapshot");
             assert.deepEqual(
                 snapshot.jobs.map((job) => [job.id, job.status]),
                 ids.map((id) => [id, "killed"]),
                 "every killed job must be persisted as killed",
             );
-            assert.equal(snapshot.stats.killedCount, ids.length);
+            assert.equal(snapshot.stats.killedCount, ids.length, "the snapshot must count every killed shell");
             assert.deepEqual(session.host.sendMessageCalls, [], "none of the lifecycle kills may notify");
             assert.deepEqual(
                 notificationsOfType(session.host, "background-shell-notification"),
                 [],
                 "no background-shell notification may be sent for any lifecycle kill",
             );
-            assert.deepEqual(turnTriggers(session.host), []);
+            assert.deepEqual(turnTriggers(session.host), [], "no lifecycle kill may trigger an agent turn");
 
             await session.host.emit("session_tree", session.ctx, {
                 newLeafId: sessionLog.leafId,
@@ -188,7 +189,7 @@ describe("lune-shell-inspector lifecycle notifications", () => {
                 completedCount: 0,
                 failedCount: 0,
                 killedCount: ids.length,
-            });
+            }, "the restored branch must count every killed shell");
         } finally {
             await session.host.emit("session_shutdown", session.ctx);
             removeTempWorkDir(workDir);
@@ -232,7 +233,7 @@ describe("lune-shell-inspector lifecycle notifications", () => {
             shellManager.settleJob("after-shutdown", { type: "completed", exitCode: 0 });
 
             assert.deepEqual(session.host.sendMessageCalls, [], "the ended session must not be notified again");
-            assert.deepEqual(turnTriggers(session.host), []);
+            assert.deepEqual(turnTriggers(session.host), [], "the ended session must not trigger an agent turn again");
         } finally {
             removeTempWorkDir(workDir);
         }
