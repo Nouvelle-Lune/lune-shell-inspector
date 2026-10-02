@@ -486,9 +486,11 @@ describe("lune-shell-inspector background bash", () => {
         const notification = session.host.sendMessageCalls[0]!;
         assert.equal(notification.message.customType, "background-shell-notification", "the teardown kill must notify as a shell notification");
         assert.deepEqual(notification.message.details, {
-            shellJobId: jobId,
-            status: "killed",
-            exitCode: undefined,
+            jobs: [{
+                shellJobId: jobId,
+                status: "killed",
+                exitCode: undefined,
+            }],
         }, "the notification must identify the killed job");
         assert.match(String(notification.message.content), /^Background shell call-clear-race killed\./, "the notification must open with the job id and status");
     });

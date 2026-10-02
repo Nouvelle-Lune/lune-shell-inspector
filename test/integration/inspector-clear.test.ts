@@ -23,6 +23,7 @@ import {
     openSession,
     removeTempWorkDir,
     startBackgroundBashCommand,
+    waitFor,
     waitForJobSettled,
     type ExtensionSession,
 } from "../harness.ts";
@@ -112,6 +113,7 @@ describe("lune-shell-inspector clear key", () => {
         assert.equal((await waitForJobSettled(jobId)).status, "completed", "the shell must settle before it can be cleared");
 
         const controller = shellManager.getJob(jobId)!.controller;
+        await waitFor("the batched shell notification", () => session.host.sendMessageCalls.length === 1);
         assert.equal(session.host.sendMessageCalls.length, 1, "the settle must notify the agent once");
         assert.match(dockText() ?? "", /1 shell completed/, "the settled shell must appear as completed in the dock");
 
@@ -161,6 +163,7 @@ describe("lune-shell-inspector clear key", () => {
 
         press("x");
         assert.equal(shellManager.getJob(jobId)?.status, "killed", "the kill key must settle the shell as killed");
+        await waitFor("the batched shell notification", () => session.host.sendMessageCalls.length === 1);
         assert.equal(session.host.sendMessageCalls.length, 1, "the kill must notify the agent once");
 
         press("c");

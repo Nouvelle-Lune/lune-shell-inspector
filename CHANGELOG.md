@@ -33,6 +33,12 @@
 - **`/shell` opens on an empty job list.** The inspector renders an empty frame instead of doing
   nothing when there are no shell jobs, and clearing the last entry keeps that frame on screen
   rather than closing the overlay.
+- **Background shell notifications are batched and failure-tolerant.** Terminal job events now
+  accumulate into one steering message per batch, with `details.jobs[]` replacing the single
+  `shellJobId`, and a failed delivery keeps a per-notification budget of two retries through the
+  normal batching scheduler instead of crashing Pi with an unhandled rejection. Exhausted
+  notifications are reported through the session UI (stderr when headless) and dropped without
+  blocking later ones.
 
 ## [1.0.3] - 2026-09-28
 

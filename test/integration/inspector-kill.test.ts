@@ -143,6 +143,7 @@ describe("lune-shell-inspector kill key", () => {
 
         await waitFor("the killed shell's process to exit", () => !isProcessAlive(pid));
 
+        await waitFor("the batched shell notification", () => session.host.sendMessageCalls.length === 1);
         assert.equal(session.host.sendMessageCalls.length, 1, "a kill must notify the agent exactly once");
         const notification = session.host.sendMessageCalls[0]!;
 
@@ -151,9 +152,11 @@ describe("lune-shell-inspector kill key", () => {
         assert.equal(notification.options?.triggerTurn, true, "the agent must get a turn to read it");
         assert.equal(notification.options?.deliverAs, "steer", "the notification must steer the running turn");
         assert.deepEqual(notification.message.details, {
-            shellJobId: jobId,
-            status: "killed",
-            exitCode: undefined,
+            jobs: [{
+                shellJobId: jobId,
+                status: "killed",
+                exitCode: undefined,
+            }],
         }, "the notification must identify the killed shell");
 
         const text = messageText(notification);
@@ -209,6 +212,7 @@ describe("lune-shell-inspector kill key", () => {
         try {
             press("x");
             assert.equal(shellManager.getJob(jobId)?.status, "killed", "the key must settle the job as killed");
+            await waitFor("the batched shell notification", () => session.host.sendMessageCalls.length === 1);
             assert.equal(session.host.sendMessageCalls.length, 1, "the kill must notify once");
 
             // The backend rejects with an AbortError after the process tree was killed; the runner's
@@ -257,6 +261,7 @@ describe("lune-shell-inspector kill key", () => {
                 "the second x must not move a counter",
             );
             assert.deepEqual(terminalEvents, ["job-killed"], "the job must emit exactly one kill event");
+            await waitFor("the batched shell notification", () => session.host.sendMessageCalls.length === 1);
             assert.equal(session.host.sendMessageCalls.length, 1, "a repeated kill must not notify twice");
         } finally {
             unsubscribe();

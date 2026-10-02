@@ -40,7 +40,7 @@ export default function (pi: ExtensionAPI): void {
         unsubscribeBackgroundShellNotifications?.();
 
         // Register background shell notifications
-        unsubscribeBackgroundShellNotifications = registerBackgroundShellNotifications(pi);
+        unsubscribeBackgroundShellNotifications = registerBackgroundShellNotifications(pi, ctx);
 
         shellDock.render();
     });
@@ -62,7 +62,7 @@ export default function (pi: ExtensionAPI): void {
         try {
             shellManager.clearAllJobs(pi);
         } finally {
-            unsubscribeBackgroundShellNotifications = registerBackgroundShellNotifications(pi);
+            unsubscribeBackgroundShellNotifications = registerBackgroundShellNotifications(pi, ctx);
         }
 
     });

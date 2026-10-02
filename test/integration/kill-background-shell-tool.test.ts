@@ -84,7 +84,7 @@ function messageText(call: SendMessageCall): string {
 /** Notifications the session sent for one job, in call order. */
 function notificationsFor(session: ExtensionSession, jobID: string): SendMessageCall[] {
     return session.host.sendMessageCalls.filter(
-        (call) => (call.message.details as { shellJobId?: string } | undefined)?.shellJobId === jobID,
+        (call) => (call.message.details as { jobs: Array<{ shellJobId: string }> }).jobs.some((job) => job.shellJobId === jobID),
     );
 }
 
@@ -207,6 +207,7 @@ describe("lune-shell-inspector kill_background_shell invocation", () => {
             await killShell(killTool, jobId);
 
             assert.deepEqual(terminalEvents.events, ["job-killed"], "an agent kill must emit exactly one kill event");
+            await waitFor("the batched kill notification", () => notificationsFor(session, jobId).length === 1);
             const notifications = notificationsFor(session, jobId);
             assert.equal(notifications.length, 1, "an agent kill must notify exactly once");
 
@@ -216,9 +217,11 @@ describe("lune-shell-inspector kill_background_shell invocation", () => {
             assert.equal(call.options?.triggerTurn, true, "the agent must get a turn to read it");
             assert.equal(call.options?.deliverAs, "steer", "the notification must steer the running turn");
             assert.deepEqual(call.message.details, {
-                shellJobId: jobId,
-                status: "killed",
-                exitCode: undefined,
+                jobs: [{
+                    shellJobId: jobId,
+                    status: "killed",
+                    exitCode: undefined,
+                }],
             }, "the notification must identify the killed shell");
 
             const text = messageText(call);
@@ -411,6 +414,7 @@ describe("lune-shell-inspector kill_background_shell invocation", () => {
             assert.ok(finishedAt !== undefined, `a successful kill must stamp the finish, got ${String(finishedAt)}`);
             assert.equal(killedJob.error, "Shell killed by agent", "the first kill must record its reason");
             assert.deepEqual(terminalEvents.events, ["job-killed"], "the first kill must emit one kill event");
+            await waitFor("the first batched kill notification", () => notificationsFor(session, jobId).length === 1);
             assert.equal(notificationsFor(session, jobId).length, 1, "the first kill must notify once");
 
             const second = await killShell(killTool, jobId);
