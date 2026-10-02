@@ -22,6 +22,7 @@ import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 
 import { ShellInspector } from "../../src/shell/shell-inspector.ts";
 import { shellManager } from "../../src/shell/shell-manager.ts";
+import type { BackgroundShellNotificationDetails } from "../../src/shell/shell-notification.ts";
 import {
     createTempWorkDir,
     openSession,
@@ -148,16 +149,17 @@ describe("lune-shell-inspector kill key", () => {
         const notification = session.host.sendMessageCalls[0]!;
 
         assert.equal(notification.message.customType, "background-shell-notification", "the kill must notify under the shell notification type");
-        assert.equal(notification.message.display, false, "the notification must not enter the transcript");
+        assert.equal(notification.message.display, true, "the notification must enter the transcript, where the box renders it");
         assert.equal(notification.options?.triggerTurn, true, "the agent must get a turn to read it");
         assert.equal(notification.options?.deliverAs, "steer", "the notification must steer the running turn");
-        assert.deepEqual(notification.message.details, {
-            jobs: [{
-                shellJobId: jobId,
-                status: "killed",
-                exitCode: undefined,
-            }],
-        }, "the notification must identify the killed shell");
+
+        const killedJobRows = (notification.message.details as BackgroundShellNotificationDetails).jobs;
+        assert.deepEqual(
+            killedJobRows.map(({ shellJobId, status, exitCode }) => ({ shellJobId, status, exitCode })),
+            [{ shellJobId: jobId, status: "killed", exitCode: undefined }],
+            "the notification must identify the killed shell",
+        );
+        assert.equal(killedJobRows[0]!.command, `echo $$ > '${pidFile}'; printf 'ready\\n'; exec sleep 300`, "the box must render the killed shell's command");
 
         const text = messageText(notification);
         assert.ok(text.startsWith(`Background shell ${jobId} killed.`), `the notification must open with the job id and status: ${text}`);

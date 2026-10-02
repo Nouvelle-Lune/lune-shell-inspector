@@ -51,7 +51,7 @@ Run this command in the foreground because I need the result before continuing.
 - **Makes terminal output readable.** Progress bars, redraws, spinners, and other terminal-style output are rendered as a screen instead of raw escape sequences.
 - **Lets the agent inspect background jobs.** The `background_shell` tool can query job status and, when needed, current output.
 - **Lets the agent stop a job it no longer needs.** A running background shell can be cancelled on request, and it stays in the list with its output, so nothing has to be read before the job is stopped.
-- **Returns completion to the agent.** When a background job finishes, fails, or is killed, the result is delivered back to the agent so it can react without constant polling.
+- **Returns completion to the agent.** When a background job finishes, fails, or is killed, the result is delivered back to the agent so it can react without constant polling, and the same batch appears in the transcript as a status band with the command, outcome and output tail (`ctrl+o` expands it).
 - **Follows the Pi session.** Shell state is restored with the active session branch, and running jobs are stopped when their owning Pi session shuts down.
 
 ## Shell dock

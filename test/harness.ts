@@ -41,6 +41,7 @@ import type {
     BashToolDetails,
     ExtensionAPI,
     ExtensionContext,
+    MessageRenderer,
     ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
@@ -573,6 +574,8 @@ export type PiEventHandler = (event: unknown, ctx: ExtensionContext, ...rest: un
 export interface FakePiHost {
     readonly registeredTools: readonly BashToolDefinition[];
     readonly registeredCommands: readonly RegisteredCommand[];
+    /** Message renderers the extension registered, in call order. */
+    readonly registeredMessageRenderers: readonly RegisteredMessageRenderer[];
     /** Custom messages the extension sent to the session, in call order. */
     readonly sendMessageCalls: readonly SendMessageCall[];
     /** `pi.appendEntry` calls, in call order. */
@@ -588,6 +591,17 @@ export interface RegisteredCommand {
     name: string;
     description: string | undefined;
     handler: (args: string, ctx: ExtensionContext) => Promise<void> | void;
+}
+
+/**
+ * A transcript renderer the extension registered with `pi.registerMessageRenderer`.
+ *
+ * The fake keeps the renderer itself so a test can drive it with a message the extension really
+ * sent; pi resolves it by custom type whenever it draws a custom message row.
+ */
+export interface RegisteredMessageRenderer {
+    customType: string;
+    renderer: MessageRenderer;
 }
 
 /** Options for {@link registerExtension}. */
@@ -620,6 +634,7 @@ export function registerExtension(cwd: string, sessionLog?: FakeSessionLog, opti
     const previousCwd = process.cwd();
     const registeredTools: BashToolDefinition[] = [];
     const registeredCommands: RegisteredCommand[] = [];
+    const registeredMessageRenderers: RegisteredMessageRenderer[] = [];
     const sendMessageCalls: SendMessageCall[] = [];
     const appendEntryCalls: AppendEntryCall[] = [];
     const handlersByEvent = new Map<PiEventName, PiEventHandler[]>();
@@ -638,6 +653,9 @@ export function registerExtension(cwd: string, sessionLog?: FakeSessionLog, opti
                 description: options.description,
                 handler: options.handler,
             });
+        },
+        registerMessageRenderer: (customType: string, renderer: MessageRenderer) => {
+            registeredMessageRenderers.push({ customType, renderer });
         },
         appendEntry: (customType: string, data?: unknown) => {
             appendEntryCalls.push({ customType, data });
@@ -675,6 +693,7 @@ export function registerExtension(cwd: string, sessionLog?: FakeSessionLog, opti
     return {
         registeredTools,
         registeredCommands,
+        registeredMessageRenderers,
         sendMessageCalls,
         appendEntryCalls,
         handlers: (event) => handlersByEvent.get(event) ?? [],

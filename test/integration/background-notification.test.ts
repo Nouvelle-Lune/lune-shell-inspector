@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { shellManager } from "../../src/shell/shell-manager.ts";
-import { registerBackgroundShellNotifications } from "../../src/shell/shell-notification.ts";
+import { registerBackgroundShellNotifications, type BackgroundShellNotificationDetails } from "../../src/shell/shell-notification.ts";
 import {
     createFakeContext,
     createFakeUi,
@@ -95,16 +95,25 @@ describe("lune-shell-inspector background notifications", () => {
             const text = messageText(call);
 
             assert.equal(call.message.customType, "background-shell-notification", "the notification must use the extension's custom type");
-            assert.equal(call.message.display, false, "the notification must not enter the transcript");
+            assert.equal(call.message.display, true, "the notification must enter the transcript, where the box renders it");
             assert.equal(call.options?.triggerTurn, true, "the agent must get a turn to read it");
             assert.equal(call.options?.deliverAs, "steer", "the notification must steer the running turn");
-            assert.deepEqual(call.message.details, {
-                jobs: [{
-                    shellJobId: jobId,
-                    status: "completed",
-                    exitCode: 0,
-                }],
-            }, "the notification must identify the job and its outcome");
+
+            const jobs = (call.message.details as BackgroundShellNotificationDetails).jobs;
+            assert.equal(jobs.length, 1, "one settled job must produce one box row");
+            const job = jobs[0]!;
+            assert.deepEqual(
+                { shellJobId: job.shellJobId, status: job.status, exitCode: job.exitCode },
+                { shellJobId: jobId, status: "completed", exitCode: 0 },
+                "the notification must identify the job and its outcome",
+            );
+            assert.equal(job.command, "echo notify-done", "the box must render the command from details");
+            assert.ok(job.durationMs !== undefined && job.durationMs >= 0, "the box must show how long the job ran");
+            assert.equal(
+                text.slice(job.output.start, job.output.end),
+                settled.output.content,
+                "the box must read the output from the slice of the message text, not from a second copy",
+            );
 
             assert.ok(text.startsWith(`Background shell ${jobId} completed.`), `the notification must open with the job id and status: ${text}`);
             assert.ok(text.includes("Command: echo notify-done"), `the notification must report the command: ${text}`);
@@ -116,6 +125,20 @@ describe("lune-shell-inspector background notifications", () => {
             // fully settled, the job must not have notified a second time.
             await new Promise((resolve) => setTimeout(resolve, 300));
             assert.equal(session.host.sendMessageCalls.length, 1, "a natural completion must notify exactly once");
+        });
+    });
+
+    it("registers exactly one transcript renderer for the notification type", async () => {
+        // Contract: pi resolves the box by custom type when it draws the row, so the renderer has to
+        // be registered at load time - a session handler would re-register the same function on every
+        // restart, and a missing registration would leave the notification invisible.
+        await withSession("notify-renderer", async (session) => {
+            const registered = session.host.registeredMessageRenderers.filter(
+                (entry) => entry.customType === "background-shell-notification",
+            );
+
+            assert.equal(registered.length, 1, "the box must be registered exactly once");
+            assert.equal(typeof registered[0]!.renderer, "function", "the registration must carry the renderer");
         });
     });
 
@@ -210,13 +233,13 @@ describe("lune-shell-inspector background notifications", () => {
             await waitFor("the batched shell notification", () => session.host.sendMessageCalls.length === 1);
             assert.equal(session.host.sendMessageCalls.length, 1, "the teardown kill notifies once");
             const notification = sentMessage(session.host.sendMessageCalls, 0);
-            assert.deepEqual(notification.message.details, {
-                jobs: [{
-                    shellJobId: jobId,
-                    status: "killed",
-                    exitCode: undefined,
-                }],
-            }, "the teardown kill must identify the job and its outcome");
+            const jobs = (notification.message.details as BackgroundShellNotificationDetails).jobs;
+            assert.deepEqual(
+                jobs.map(({ shellJobId, status, exitCode }) => ({ shellJobId, status, exitCode })),
+                [{ shellJobId: jobId, status: "killed", exitCode: undefined }],
+                "the teardown kill must identify the job and its outcome",
+            );
+            assert.equal(jobs[0]!.command, "sleep 1; printf 'late\\n'", "the box must render the killed job's command");
         });
     });
 
@@ -431,8 +454,8 @@ describe("lune-shell-inspector background notifications", () => {
             await waitFor("the batched burst notification", () => session.host.sendMessageCalls.length === 1);
             assert.equal(session.host.sendMessageCalls.length, 1, "near-simultaneous events form one batch");
             const call = session.host.sendMessageCalls[0]!;
-            const jobs = (call.message.details as { jobs: Array<{ shellJobId: string; status: string; exitCode?: number }> }).jobs;
-            assert.deepEqual(jobs, [
+            const jobs = (call.message.details as BackgroundShellNotificationDetails).jobs;
+            assert.deepEqual(jobs.map(({ shellJobId, status, exitCode }) => ({ shellJobId, status, exitCode })), [
                 { shellJobId: "burst-a", status: "completed", exitCode: 0 },
                 { shellJobId: "burst-b", status: "failed", exitCode: 3 },
                 { shellJobId: "burst-c", status: "killed", exitCode: undefined },
@@ -445,6 +468,15 @@ describe("lune-shell-inspector background notifications", () => {
             ].entries()) {
                 assert.ok(sections[index]!.startsWith(`Background shell ${id} ${status}.`));
                 assert.ok(sections[index]!.endsWith(`Output:\n${output}\n`));
+
+                // The box reads each row's output from the message text by offset, so a wrong slice
+                // would show another job's output under this job's command.
+                const job = jobs.find((entry) => entry.shellJobId === id)!;
+                assert.equal(
+                    messageText(call).slice(job.output.start, job.output.end),
+                    `${output}\n`,
+                    `the ${id} slice must point at its own output`,
+                );
             }
         });
     });

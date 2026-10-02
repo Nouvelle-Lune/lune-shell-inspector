@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
 import { shellManager } from "../../src/shell/shell-manager.ts";
+import type { BackgroundShellNotificationDetails } from "../../src/shell/shell-notification.ts";
 import {
     createTempWorkDir,
     loadRegisteredTool,
@@ -213,16 +214,17 @@ describe("lune-shell-inspector kill_background_shell invocation", () => {
 
             const call = notifications[0]!;
             assert.equal(call.message.customType, "background-shell-notification", "the kill must notify under the shell notification type");
-            assert.equal(call.message.display, false, "the notification must not enter the transcript");
+            assert.equal(call.message.display, true, "the notification must enter the transcript, where the box renders it");
             assert.equal(call.options?.triggerTurn, true, "the agent must get a turn to read it");
             assert.equal(call.options?.deliverAs, "steer", "the notification must steer the running turn");
-            assert.deepEqual(call.message.details, {
-                jobs: [{
-                    shellJobId: jobId,
-                    status: "killed",
-                    exitCode: undefined,
-                }],
-            }, "the notification must identify the killed shell");
+
+            const killed = (call.message.details as BackgroundShellNotificationDetails).jobs;
+            assert.deepEqual(
+                killed.map(({ shellJobId, status, exitCode }) => ({ shellJobId, status, exitCode })),
+                [{ shellJobId: jobId, status: "killed", exitCode: undefined }],
+                "the notification must identify the killed shell",
+            );
+            assert.equal(killed[0]!.command, `printf 'ready\\n'; sleep 1; printf 'late\\n' > '${markerPath}'`, "the box must render the killed shell's command");
 
             const text = messageText(call);
             assert.ok(text.startsWith(`Background shell ${jobId} killed.`), `the notification must open with the job id and status: ${text}`);

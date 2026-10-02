@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import { DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-agent";
 
 import { shellManager } from "../../src/shell/shell-manager.ts";
+import type { BackgroundShellNotificationDetails } from "../../src/shell/shell-notification.ts";
 import { getFixture } from "../fixtures/long-running-scripts.ts";
 import {
     createFakeContext,
@@ -485,13 +486,13 @@ describe("lune-shell-inspector background bash", () => {
         assert.equal(session.host.sendMessageCalls.length, 1, "the teardown kill notifies once");
         const notification = session.host.sendMessageCalls[0]!;
         assert.equal(notification.message.customType, "background-shell-notification", "the teardown kill must notify as a shell notification");
-        assert.deepEqual(notification.message.details, {
-            jobs: [{
-                shellJobId: jobId,
-                status: "killed",
-                exitCode: undefined,
-            }],
-        }, "the notification must identify the killed job");
+        const jobs = (notification.message.details as BackgroundShellNotificationDetails).jobs;
+        assert.deepEqual(
+            jobs.map(({ shellJobId, status, exitCode }) => ({ shellJobId, status, exitCode })),
+            [{ shellJobId: jobId, status: "killed", exitCode: undefined }],
+            "the notification must identify the killed job",
+        );
+        assert.equal(jobs[0]!.output.start, jobs[0]!.output.end, "a job without output must slice an empty tail");
         assert.match(String(notification.message.content), /^Background shell call-clear-race killed\./, "the notification must open with the job id and status");
     });
 

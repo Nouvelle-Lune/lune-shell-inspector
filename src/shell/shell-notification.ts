@@ -1,13 +1,87 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { shellManager } from "./shell-manager.ts";
 
-interface BackgroundShellNotification {
+/** Custom message type of a settled-shell batch; the transcript box is registered for it. */
+export const BACKGROUND_SHELL_NOTIFICATION_TYPE = "background-shell-notification";
+
+/** Separator between the per-job sections of one batched notification. */
+const SECTION_SEPARATOR = "\n\n---\n\n";
+
+/** One settled job as the batched notification describes it. */
+export interface BackgroundShellNotification {
     jobId: string;
     jobCommand: string;
     jobStatus: string;
     jobExitCode: number | undefined;
     jobError: string | undefined;
     jobOutput: string;
+    /** Wall-clock runtime, absent while the manager has no finish timestamp to subtract from. */
+    jobDurationMs: number | undefined;
+}
+
+/** One job as the transcript box renders it. */
+export interface BackgroundShellNotificationJobDetails {
+    shellJobId: string;
+    status: string;
+    exitCode: number | undefined;
+    command: string;
+    error: string | undefined;
+    durationMs: number | undefined;
+    /**
+     * Where this job's output sits inside the message content.
+     *
+     * The box reads the text from there instead of details holding a second copy: one job can retain
+     * pi's whole 50KB tail, and details are persisted next to the content they would duplicate.
+     */
+    output: { start: number; end: number };
+}
+
+export interface BackgroundShellNotificationDetails {
+    jobs: BackgroundShellNotificationJobDetails[];
+}
+
+/**
+ * Build the model-facing text and the box-facing details of one batch.
+ *
+ * Both halves come from here because they share the output offsets: the text is the model's copy of
+ * the output and the only one stored, so the renderer has to be told where to read it.
+ */
+export function buildBackgroundShellNotification(batch: readonly BackgroundShellNotification[]): {
+    content: string;
+    details: BackgroundShellNotificationDetails;
+} {
+    const sections: string[] = [];
+    const jobs: BackgroundShellNotificationJobDetails[] = [];
+    let offset = 0;
+
+    for (const item of batch) {
+        const section = [
+            `Background shell ${item.jobId} ${item.jobStatus}.`,
+            `Command: ${item.jobCommand}`,
+            item.jobExitCode === undefined ? undefined : `Exit code: ${item.jobExitCode}`,
+            item.jobError ? `Error: ${item.jobError}` : undefined,
+            "",
+            "Output:",
+            item.jobOutput,
+        ]
+            .filter((line): line is string => line !== undefined)
+            .join("\n");
+
+        sections.push(section);
+        jobs.push({
+            shellJobId: item.jobId,
+            status: item.jobStatus,
+            exitCode: item.jobExitCode,
+            command: item.jobCommand,
+            error: item.jobError,
+            durationMs: item.jobDurationMs,
+            // The output is the section's tail, so its slice starts one output length back from the end.
+            output: { start: offset + section.length - item.jobOutput.length, end: offset + section.length },
+        });
+        offset += section.length + SECTION_SEPARATOR.length;
+    }
+
+    return { content: sections.join(SECTION_SEPARATOR), details: { jobs } };
 }
 
 class MessageSendBuffer<T> {
@@ -171,37 +245,19 @@ export function registerBackgroundShellNotifications(
         }
     };
     const messageBuffer = new MessageSendBuffer<BackgroundShellNotification>(300, (batch) => {
+        const { content, details } = buildBackgroundShellNotification(batch);
+
         return pi.sendMessage(
             {
-                customType: "background-shell-notification",
+                customType: BACKGROUND_SHELL_NOTIFICATION_TYPE,
 
-                content: batch
-                    .map((item) =>
-                        [
-                            `Background shell ${item.jobId} ${item.jobStatus}.`,
-                            `Command: ${item.jobCommand}`,
-                            item.jobExitCode === undefined
-                                ? undefined
-                                : `Exit code: ${item.jobExitCode}`,
-                            item.jobError ? `Error: ${item.jobError}` : undefined,
-                            "",
-                            "Output:",
-                            item.jobOutput,
-                        ]
-                            .filter((line): line is string => line !== undefined)
-                            .join("\n"),
-                    )
-                    .join("\n\n---\n\n"),
+                content,
 
-                display: false ,
+                // The box is the only way a settled shell reaches the transcript; the model reads the
+                // same message either way, because display never affects what is sent to it.
+                display: true,
 
-                details: {
-                    jobs: batch.map((item) => ({
-                        shellJobId: item.jobId,
-                        status: item.jobStatus,
-                        exitCode: item.jobExitCode,
-                    })),
-                },
+                details,
             },
             {
                 triggerTurn: true,
@@ -234,6 +290,7 @@ export function registerBackgroundShellNotifications(
             jobExitCode: job.exitCode,
             jobError: job.error,
             jobOutput: output,
+            jobDurationMs: job.finishedAt === undefined ? undefined : job.finishedAt - job.startedAt,
         });
     });
 

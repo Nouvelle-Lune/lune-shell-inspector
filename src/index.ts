@@ -7,9 +7,21 @@ import { shellManager } from "./shell/shell-manager.ts"
 import { openShellInspector } from "./shell/shell-inspector.ts";
 
 import { BashTool, BackgroundShellTool, KillBackgroundShellTool } from "./tools/bash-tool.ts";
-import { registerBackgroundShellNotifications } from "./shell/shell-notification.ts";
+import {
+    BACKGROUND_SHELL_NOTIFICATION_TYPE,
+    registerBackgroundShellNotifications,
+    type BackgroundShellNotificationDetails,
+} from "./shell/shell-notification.ts";
+import { renderBackgroundShellNotificationBox } from "./shell/shell-notification-box.ts";
 
 export default function (pi: ExtensionAPI): void {
+
+    // Registered once per load: the transcript looks the renderer up by custom type when it draws
+    // the message, so a session-scoped registration would only re-register the same function.
+    pi.registerMessageRenderer<BackgroundShellNotificationDetails>(
+        BACKGROUND_SHELL_NOTIFICATION_TYPE,
+        renderBackgroundShellNotificationBox,
+    );
 
     let unsubscribeShellManager:
         | (() => void)

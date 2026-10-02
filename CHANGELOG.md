@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Background shell notifications now appear in the transcript.** A settled shell - or one batch of
+  them - draws a tool-result band under the command that started it: a status header, one row per
+  job with its command, outcome and runtime, and the tail of its output, which `ctrl+o` expands to
+  the full text. The agent-facing message is unchanged, and the box reads the output from that same
+  message instead of storing a second copy; job ids stay in the message, not in the row, because
+  only the agent needs them.
+
 ## [1.1.0] - 2026-10-02
 
 ### Added
