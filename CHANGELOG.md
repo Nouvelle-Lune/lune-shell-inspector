@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-02
+
 ### Added
 
 - **Agent kill tool.** `kill_background_shell` stops one managed background shell by its job ID,
@@ -30,6 +32,9 @@
   id as a field instead of parsing the text; scripts that treated the background result as text must
   switch to `shell_job_id`. Foreground results keep the built-in
   `{ output, truncated, exit_code, wall_time_seconds }` shape.
+- **BREAKING:** **The pi peer requirements are explicit.** `@earendil-works/pi-coding-agent` and
+  `@earendil-works/pi-tui` are declared as `>=1.0.0` instead of `*`, so a pre-1.0 pi installation
+  fails the install instead of loading against an unsupported API; upgrade pi to 1.0.0 or newer.
 - **`/shell` opens on an empty job list.** The inspector renders an empty frame instead of doing
   nothing when there are no shell jobs, and clearing the last entry keeps that frame on screen
   rather than closing the overlay.
@@ -93,7 +98,8 @@
   output retention with full-output spill files, terminal-screen rendering of streamed output, and
   persistence/restore of shell state across session lifecycle events.
 
-[Unreleased]: https://github.com/Nouvelle-Lune/lune-shell-inspector/compare/v1.0.3...HEAD
+[Unreleased]: https://github.com/Nouvelle-Lune/lune-shell-inspector/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Nouvelle-Lune/lune-shell-inspector/compare/v1.0.3...v1.1.0
 [1.0.3]: https://github.com/Nouvelle-Lune/lune-shell-inspector/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/Nouvelle-Lune/lune-shell-inspector/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Nouvelle-Lune/lune-shell-inspector/compare/v1.0.0...v1.0.1
