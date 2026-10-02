@@ -16,6 +16,12 @@
   (`completed`, `failed` or `killed`) and refuses a running one without touching its process. The
   footer answers either outcome with a short-lived notice that replaces the key hints, and the
   persistent hints now advertise `c to clear`.
+- **Mouse support in `/shell`.** In pi's fullscreen mode, the wheel scrolls the output pane (with the
+  same pause-and-follow behavior as the scroll keys) or moves the selection over the job list, and a
+  left click selects a job. Presses elsewhere are left to pi's text selection, and regular mode keeps
+  the keyboard-only controls.
+- **Back-to-bottom label.** While the output is paused, the separator under the panes shows a
+  clickable `[ ↓ Back to bottom · End ]` label that resumes following the newest output.
 
 ### Changed
 

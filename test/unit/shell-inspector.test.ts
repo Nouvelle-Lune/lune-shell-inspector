@@ -28,7 +28,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
 
 import { ShellInspector } from "../../src/shell/shell-inspector.ts";
 import { shellManager, type ShellJobOutcome } from "../../src/shell/shell-manager.ts";
@@ -198,6 +198,61 @@ describe("shell inspector", () => {
             .filter((call) => call.color === "warning")
             .at(-1)
             ?.text;
+    }
+
+    /**
+     * Send one mouse event after a render, at overlay-local cell coordinates, the way fullscreen
+     * mode delivers it to the overlay. The coordinates are read off the rendered frame by the
+     * callers, so the tests hit what the user would see rather than a recomputed layout.
+     */
+    function mouse(
+        type: TuiMouseEvent["type"],
+        x: number,
+        y: number,
+        extra: Partial<TuiMouseEvent> = {},
+    ): ReturnType<ShellInspector["handleMouse"]> {
+        const lines = inspector.render(WIDTH);
+
+        return inspector.handleMouse({
+            type,
+            button: type === "wheel" ? "none" : "left",
+            x,
+            y,
+            screenX: x + 5,
+            screenY: y + 2,
+            width: WIDTH,
+            height: lines.length,
+            shift: false,
+            alt: false,
+            ctrl: false,
+            ...extra,
+        });
+    }
+
+    /** A cell inside the output pane: the first output row, a few columns into the right pane. */
+    function outputCell(): { x: number; y: number } {
+        const lines = inspector.render(WIDTH);
+        const y = lines.findIndex((line) => rightCell(line).startsWith("Output ·")) + 1;
+
+        return { x: lines[y]!.indexOf("│", 1) + 3, y };
+    }
+
+    /** A cell on the job row whose left pane mentions `text`. */
+    function jobCell(text: string): { x: number; y: number } {
+        const y = inspector.render(WIDTH).findIndex((line) => leftCell(line).includes(text));
+
+        assert.ok(y >= 0, `the job list must show ${text}`);
+
+        return { x: 4, y };
+    }
+
+    /** The back-to-bottom label on the bottom separator, if the newest frame drew one. */
+    function backToBottomCell(): { x: number; y: number } | undefined {
+        const lines = inspector.render(WIDTH);
+        const y = lines.length - 3;
+        const x = lines[y]!.indexOf("[ ↓ Back to bottom");
+
+        return x < 0 ? undefined : { x, y };
     }
 
     /** The footer row of the newest frame: the key hints, or the notice that replaced them. */
@@ -693,6 +748,149 @@ describe("shell inspector", () => {
         assert.ok(narrow.every((line) => visibleWidth(line) === 70), `every row must fit the narrow frame, got widths ${JSON.stringify(narrow.map((line) => visibleWidth(line)))}`);
         assert.ok(narrow.some((line) => line.includes("…")), `the pane must mark the truncation, got ${JSON.stringify(narrow)}`);
         assert.deepEqual(shellManager.getScreenLines("job-1"), [wide], "the emulator must keep the full logical line");
+    });
+
+    describe("mouse", () => {
+        it("scrolls the output by the wheel delta over the output pane", async () => {
+            await addJob("job-1", "tail -f app.log", lineOutput(40));
+            const { x, y } = outputCell();
+
+            const result = mouse("wheel", x, y, { wheelDelta: -3 });
+
+            assert.deepEqual(result, { handled: true }, "the wheel must be claimed so the transcript behind stays put");
+            assert.equal(visibleOutput().at(-1), "line 37", "a wheel delta of -3 must move the pane three lines back");
+            assert.equal(pausedMarker(), " · paused ↑3", "wheel scrolling must pause like the keys");
+
+            mouse("wheel", x, y, { wheelDelta: 3 });
+
+            assert.equal(visibleOutput().at(-1), "line 40", "scrolling forward must reach the newest line again");
+            assert.equal(pausedMarker(), undefined, "reaching the newest line must resume following");
+        });
+
+        it("does not scroll the output past the oldest line with the wheel", async () => {
+            await addJob("job-1", "tail -f app.log", lineOutput(40));
+            const { x, y } = outputCell();
+
+            mouse("wheel", x, y, { wheelDelta: -500 });
+
+            assert.equal(visibleOutput().at(0), "line 1", "the wheel must stop at the oldest line");
+        });
+
+        it("moves the selection with the wheel over the job list", async () => {
+            await addJob("job-a", "cmd-a", prefixedOutput("a", 3));
+            await addJob("job-b", "cmd-b", prefixedOutput("b", 3));
+            await addJob("job-c", "cmd-c", prefixedOutput("c", 3));
+            const { x, y } = jobCell("cmd-a");
+
+            const result = mouse("wheel", x, y, { wheelDelta: 1 });
+
+            assert.deepEqual(result, { handled: true }, "the wheel over the list must be claimed");
+            assert.deepEqual(visibleOutput(), ["b 1", "b 2", "b 3"], "wheel down must select the next shell");
+
+            mouse("wheel", x, y, { wheelDelta: 10 });
+
+            assert.deepEqual(visibleOutput(), ["c 1", "c 2", "c 3"], "the wheel must stop at the last shell");
+        });
+
+        it("selects the clicked job row", async () => {
+            await addJob("job-a", "tail -f a.log", prefixedOutput("a", 40));
+            await addJob("job-b", "cmd-b", prefixedOutput("b", 3));
+            press(SHIFT_UP);
+            const redrawsBefore = renderRequests;
+            const { x, y } = jobCell("cmd-b");
+
+            const result = mouse("press", x, y);
+
+            assert.deepEqual(result, { handled: true }, "a press on a job row must be claimed");
+            assert.equal(renderRequests, redrawsBefore + 1, "selecting by click must ask for a redraw");
+            assert.ok(
+                frame().lines.map(leftCell).some((cell) => cell.startsWith("› ● cmd-b")),
+                "the clicked shell must be highlighted",
+            );
+            assert.deepEqual(visibleOutput(), ["b 1", "b 2", "b 3"], "the pane must show the clicked shell");
+            assert.equal(pausedMarker(), undefined, "a newly clicked shell must follow its newest output");
+        });
+
+        it("leaves presses outside the job rows to the terminal's text selection", async () => {
+            await addJob("job-a", "cmd-a", prefixedOutput("a", 3));
+            await addJob("job-b", "cmd-b", prefixedOutput("b", 3));
+            const output = outputCell();
+            const blankListRow = jobCell("cmd-b").y + 1;
+
+            assert.equal(mouse("press", output.x, output.y), undefined, "a press in the output must stay selectable");
+            assert.equal(mouse("press", 4, blankListRow), undefined, "a press below the last job must not select anything");
+            assert.equal(mouse("press", 4, 1), undefined, "a press on the header must not select anything");
+            assert.equal(
+                mouse("press", 4, jobCell("cmd-b").y, { button: "right" }),
+                undefined,
+                "only the primary button selects a job",
+            );
+            assert.deepEqual(visibleOutput(), ["a 1", "a 2", "a 3"], "the selection must not move");
+        });
+
+        it("keeps every mouse event harmless on an empty list", () => {
+            inspector.render(WIDTH);
+
+            assert.doesNotThrow(() => {
+                mouse("wheel", 4, 4, { wheelDelta: 3 });
+                mouse("wheel", 60, 4, { wheelDelta: -3 });
+                mouse("press", 4, 3);
+            }, "mouse input on an empty inspector must not throw");
+        });
+    });
+
+    describe("back-to-bottom label", () => {
+        it("appears on the bottom separator only while the output is paused", async () => {
+            await addJob("job-1", "tail -f app.log", lineOutput(40));
+
+            assert.equal(backToBottomCell(), undefined, "a following pane must not offer to go back to the bottom");
+
+            press(SHIFT_UP);
+            const lines = inspector.render(WIDTH);
+            const separator = lines.at(-3)!;
+
+            assert.ok(separator.includes("[ ↓ Back to bottom · End ]"), `the paused pane must offer the label, got ${JSON.stringify(separator)}`);
+            assert.ok(separator.startsWith("├") && separator.endsWith("┤"), "the label must stay inside the frame");
+            assert.equal(visibleWidth(separator), WIDTH, "the label must not widen the frame");
+            assert.equal(visibleOutput().length, outputRowsBelowHeader(lines), "the label must not take an output row");
+
+            press(END);
+
+            assert.equal(backToBottomCell(), undefined, "the label must leave once the pane follows again");
+        });
+
+        it("follows the newest output when clicked", async () => {
+            await addJob("job-1", "tail -f app.log", lineOutput(40));
+            press(HOME);
+            const label = backToBottomCell();
+            assert.ok(label, "the paused pane must draw the label");
+
+            const result = mouse("press", label.x + 2, label.y);
+
+            assert.deepEqual(result, { handled: true }, "a press on the label must be claimed");
+            assert.equal(visibleOutput().at(-1), "line 40", "clicking the label must jump to the newest line");
+            assert.equal(pausedMarker(), undefined, "clicking the label must resume following");
+
+            await writeOutput("job-1", "\nline 41");
+
+            assert.equal(visibleOutput().at(-1), "line 41", "the pane must keep following after the click");
+        });
+
+        it("ignores presses on the separator beside the label", async () => {
+            await addJob("job-1", "tail -f app.log", lineOutput(40));
+            press(SHIFT_UP);
+            const label = backToBottomCell()!;
+
+            assert.equal(mouse("press", label.x - 1, label.y), undefined, "the dashes before the label are not a button");
+            assert.equal(pausedMarker(), " · paused ↑1", "a press beside the label must keep the pause");
+        });
+
+        /** Body rows below the `Output` header: the bottom separator, footer and border are not body. */
+        function outputRowsBelowHeader(lines: string[]): number {
+            const header = lines.findIndex((line) => rightCell(line).startsWith("Output ·"));
+
+            return lines.length - 3 - header - 1;
+        }
     });
 
     it("lists a labelled job by its label while the details keep the command", async () => {
