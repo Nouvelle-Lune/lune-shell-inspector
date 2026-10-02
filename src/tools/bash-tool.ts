@@ -75,7 +75,7 @@ export function BashTool() {
             : undefined,
 
         promptSnippet:
-            "Run shell commands in foreground or background; background commands keep running independently and remain observable.",
+            "Run shell commands in foreground or background; background work remains observable, and long-running code should emit live human-readable runtime progress.",
         promptGuidelines: [
             "Use foreground mode when no useful work can proceed until the command finishes.",
             "Use background mode for independent long-running work so you can continue with other useful work while it runs.",
@@ -83,7 +83,7 @@ export function BashTool() {
             "Never use foreground sleep commands, polling loops, or repeated status checks solely to wait for a background shell to finish.",
             "If no useful independent work remains, end the current turn and rely on the background shell's completion notification to resume work.",
             "Use background_shell only when you genuinely need intermediate status or output before completion, not to poll for completion.",
-            "When writing long-running scripts or programs, make them observable by design with live progress output such as tqdm, counters, stage logs, or epoch/step updates appropriate to the workload.",
+            "Treat runtime observability as a requirement for non-trivial executable code. Any operation that may take noticeable time, performs repeated or batched work, or has multiple long-running stages MUST expose live human-readable progress while it runs. A start message followed only by a completion message is not sufficient. Report the current stage and quantitative progress when available (completed/total, percentage, epoch/step, files/items processed, throughput, etc.); otherwise emit periodic status updates. Use appropriate progress facilities such as tqdm or explicit logging, and make sure updates are flushed promptly and remain observable when the process runs non-interactively with its output connected to a pipe.",
         ],
 
         renderCall(args, theme, context) {
