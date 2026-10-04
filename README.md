@@ -100,6 +100,8 @@ The inspector remembers which shell you were viewing: close it and reopen `/shel
 
 In pi's fullscreen mode (the default since pi 1.0.0), the mouse works too: the wheel scrolls the output pane or moves the selection over the job list, and clicking a job selects it. Regular mode leaves the mouse to the terminal, so every action keeps its key.
 
+Each pane has an automatically hidden scrollbar on its right edge when its content exceeds the viewport. Scrolling output reveals the output scrollbar; selecting a shell in an overflowing list reveals the list scrollbar. Each hides independently after one second without further interaction. The bars show the current position and visible proportion without covering text or changing wrapping.
+
 Output follows the newest lines by default. Scrolling upward pauses that follow behavior so new output does not pull the viewport away from what you are reading. While paused, a `[ ↓ Back to bottom · End ]` label appears on the separator below the output; click it or press `End` to follow the newest lines again.
 
 ## Agent-facing tools

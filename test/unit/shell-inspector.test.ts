@@ -101,14 +101,14 @@ async function addSettledJob(
 
 /** The right pane of one rendered line; empty for the separator and border lines. */
 function rightCell(line: string): string {
-    const cells = line.split("│");
-    return cells.length === 4 ? cells[2]!.trim() : "";
+    const cells = line.replace(/[│┃](?=│)/g, " ").split("│");
+    return cells.length >= 4 ? cells.slice(2, -1).join("│").replace(/[│┃]$/, "").trim() : "";
 }
 
 /** The left pane of one rendered body line; empty for the frame and separator lines. */
 function leftCell(line: string): string {
-    const cells = line.split("│");
-    return cells.length === 4 ? cells[1]!.trim() : "";
+    const cells = line.replace(/[│┃](?=│)/g, " ").split("│");
+    return cells.length >= 4 ? cells[1]!.trim() : "";
 }
 
 describe("shell inspector", () => {
@@ -1007,6 +1007,134 @@ describe("shell inspector", () => {
             footer.includes("Esc to close"),
             `the footer must still show the close key: ${footer}`,
         );
+    });
+
+    describe("automatic scrollbars", () => {
+        it("hides output after inactivity and renews the deadline on scroll", async (t) => {
+            await addJob("job-1", "seq 80", lineOutput(80));
+            t.mock.timers.enable({ apis: ["setTimeout"] });
+            press(HOME);
+            assert.ok(frame().fgCalls.some((call) => call.color === "scrollbarThumb"));
+            t.mock.timers.tick(900);
+            press(SHIFT_DOWN);
+            t.mock.timers.tick(900);
+            assert.ok(frame().fgCalls.some((call) => call.color === "scrollbarThumb"));
+            const requests = renderRequests;
+            t.mock.timers.tick(100);
+            assert.equal(renderRequests, requests + 1);
+            assert.ok(!frame().fgCalls.some((call) => call.color.startsWith("scrollbar")));
+        });
+
+        it("shows the left scrollbar only for an overflowing list and hides it independently", async (t) => {
+            for (let i = 0; i < 20; i++) await addJob(`job-${i}`, `cmd-${i}`, lineOutput(40));
+            t.mock.timers.enable({ apis: ["setTimeout"] });
+            assert.ok(!frame().fgCalls.some((call) => call.color.startsWith("scrollbar")));
+            press("j");
+            const lines = frame().lines;
+            const separator = lines[2]!.indexOf("┬");
+            assert.equal(lines[3]![separator - 1], "┃");
+            assert.equal(lines.at(-4)![separator - 1], "│");
+            assert.ok(lines.every((line) => visibleWidth(line) === WIDTH));
+            assert.deepEqual(mouse("wheel", 4, 3, { wheelDelta: 30 }), { handled: true });
+            const bottom = frame().lines;
+            assert.equal(bottom.at(-4)![separator - 1], "┃");
+            assert.ok(leftCell(bottom.at(-4)!).includes("cmd-19"));
+            t.mock.timers.tick(500);
+            press(HOME);
+            t.mock.timers.tick(500);
+            const current = frame();
+            assert.equal(current.lines[3]![separator - 1], " ");
+            assert.ok(current.fgCalls.some((call) => call.color === "scrollbarThumb"));
+            t.mock.timers.tick(500);
+            assert.ok(!frame().fgCalls.some((call) => call.color.startsWith("scrollbar")));
+        });
+
+        it("never shows a left scrollbar when the shell list fits", async () => {
+            await addJob("job-1", "first", "short");
+            await addJob("job-2", "second", "short");
+            press("j");
+            assert.ok(!frame().fgCalls.some((call) => call.color.startsWith("scrollbar")));
+        });
+
+        it("cancels pending scrollbar redraws on disposal", async (t) => {
+            await addJob("job-1", "seq 80", lineOutput(80));
+            t.mock.timers.enable({ apis: ["setTimeout"] });
+            press(HOME);
+            inspector.dispose();
+            const requests = renderRequests;
+            t.mock.timers.tick(1000);
+            assert.equal(renderRequests, requests);
+        });
+    });
+
+    describe("output scrollbar", () => {
+        function scrollbar(): string[] {
+            const lines = inspector.render(WIDTH);
+            const header = lines.findIndex((line) => rightCell(line).startsWith("Output ·"));
+            return lines.slice(header + 1, -3).map((line) => line.at(-2)!);
+        }
+
+        it("marks the newest, oldest and intermediate output positions", async () => {
+            await addJob("job-1", "seq 80", lineOutput(80));
+            assert.ok(scrollbar().every((cell) => cell === " "));
+            press(SHIFT_UP);
+            press(END);
+            const tail = scrollbar();
+            assert.equal(tail.at(-1), "┃");
+            assert.equal(tail[0], "│");
+            assert.ok(tail.every((cell) => cell === "│" || cell === "┃"));
+
+            press(HOME);
+            assert.equal(scrollbar()[0], "┃");
+            assert.equal(scrollbar().at(-1), "│");
+
+            const { x, y } = outputCell();
+            assert.deepEqual(mouse("wheel", x, y, { wheelDelta: 29 }), { handled: true });
+            press(SHIFT_DOWN);
+            const middle = scrollbar();
+            assert.equal(middle[0], "│");
+            assert.equal(middle.at(-1), "│");
+            assert.ok(middle.includes("┃"));
+
+            press(END);
+            assert.deepEqual(scrollbar(), tail);
+            const colors = frame().fgCalls;
+            assert.ok(colors.some((call) => call.color === "scrollbarTrack" && call.text === "│"));
+            assert.ok(colors.some((call) => call.color === "scrollbarThumb" && call.text === "┃"));
+        });
+
+        it("does not draw a scrollbar when output fits or is empty", async () => {
+            await addJob("job-1", "echo short", "short\n");
+            assert.ok(scrollbar().every((cell) => cell === " "));
+            await addJob("job-2", "empty", "");
+            press("j");
+            assert.ok(scrollbar().every((cell) => cell === " "));
+        });
+
+        it("updates the thumb size while preserving paused output during streaming", async () => {
+            await addJob("job-1", "seq 20", lineOutput(20));
+            press(HOME);
+            const before = scrollbar().filter((cell) => cell === "┃").length;
+            const visible = visibleOutput();
+            await writeOutput("job-1", "\n" + lineOutput(80));
+            assert.deepEqual(visibleOutput(), visible);
+            assert.equal(scrollbar()[0], "┃");
+            assert.ok(scrollbar().filter((cell) => cell === "┃").length < before);
+            press(END);
+            assert.equal(scrollbar().at(-1), "┃");
+        });
+
+        it("reflects wrapped output and keeps the frame width on resize", async () => {
+            await addJob("job-1", "cat wide.txt", "🙂".repeat(800));
+            press(HOME);
+            press(END);
+            for (const width of [70, WIDTH]) {
+                const lines = inspector.render(width);
+                assert.ok(lines.every((line) => visibleWidth(line) === width));
+                assert.equal(lines.at(-4)!.at(-2), "┃");
+                assert.ok(lines.some((line) => line.endsWith("││")));
+            }
+        });
     });
 
     it("wraps wide characters to a narrow pane and reflows on resize", async () => {

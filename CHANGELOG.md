@@ -4,6 +4,9 @@
 
 ### Added
 
+- **Auto-hiding scrollbars in `/shell`.** Overflowing output and shell lists now show themed
+  scrollbars during scrolling or shell selection, hiding independently after one second of inactivity.
+  The bars reflect each viewport without covering text or changing the pause-and-follow behavior.
 - **The `/shell` inspector remembers the selected shell.** Closing the overlay and reopening `/shell`
   resumes on the shell that was selected last instead of jumping back to the first entry. The
   position is memory-only view state: it is not written to the session snapshot, and clearing the

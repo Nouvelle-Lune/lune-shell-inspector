@@ -32,6 +32,7 @@ const BODY_MAX_HEIGHT = 18;
 const BODY_TOP = 3;
 
 const FOOTER_NOTICE_DURATION_MS = 1800;
+const SCROLLBAR_HIDE_DELAY_MS = 1000;
 
 const BACK_TO_BOTTOM_LABEL = "[ ↓ Back to bottom · End ]";
 
@@ -85,6 +86,9 @@ export class ShellInspector implements Component {
     /** Output rows the last render could show; key handling needs it to clamp the anchor. */
     private outputRows = 0;
     private outputWidth = 1;
+    private readonly scrollbarTimers: Partial<
+        Record<"jobs" | "output", ReturnType<typeof setTimeout>>
+    > = {};
 
     /**
      * Pane layout of the last frame. Mouse events arrive as overlay-local cells, so hit-testing
@@ -288,6 +292,10 @@ export class ShellInspector implements Component {
 
         // A different job has a different output; reading it from the middle would be confusing.
         this.outputAnchor = undefined;
+        this.hideScrollbar("output");
+        if (this.paneLayout && shellManager.getAllJobsList().length > this.paneLayout.bodyHeight) {
+            this.showScrollbar("jobs");
+        }
 
         this.requestRender();
     }
@@ -421,6 +429,9 @@ export class ShellInspector implements Component {
             this.footerNoticeTimer = undefined;
         }
 
+        this.hideScrollbar("jobs");
+        this.hideScrollbar("output");
+
         this.unsubscribeJobs?.();
         this.unsubscribeJobs = undefined;
     }
@@ -540,7 +551,10 @@ export class ShellInspector implements Component {
             );
         }
 
-        return this.fill(rows, width, bodyHeight);
+        const filled = this.fill(rows, width, bodyHeight);
+        return filled.map((line, index) =>
+            this.withScrollbar(line, "jobs", index, start, bodyHeight, jobs.length),
+        );
     }
 
     private renderDetails(job: Readonly<ShellJob>, width: number, bodyHeight: number): string[] {
@@ -597,8 +611,12 @@ export class ShellInspector implements Component {
         } else if (window.count > 0) {
             const visible = output.slice(window.start, window.start + window.count);
 
-            for (const line of visible) {
-                rows.push(this.cell(line, width));
+            for (const [index, line] of visible.entries()) {
+                rows.push(
+                    this.withScrollbar(
+                        this.cell(line, width), "output", index, window.start, available, output.length,
+                    ),
+                );
             }
         }
 
@@ -618,6 +636,7 @@ export class ShellInspector implements Component {
 
         const lineCount = this.wrapOutput(shellManager.getScreenLines(job.id)).length;
         const tailStart = Math.max(0, lineCount - this.outputRows);
+        const previousStart = this.outputAnchor ?? tailStart;
 
         if (this.outputAnchor === undefined) {
             if (step > 0) {
@@ -633,6 +652,9 @@ export class ShellInspector implements Component {
             this.outputAnchor = undefined;
         }
 
+        if ((this.outputAnchor ?? tailStart) !== previousStart) {
+            this.showScrollbar("output");
+        }
         this.requestRender();
     }
 
@@ -644,15 +666,53 @@ export class ShellInspector implements Component {
     }
 
     private jumpToOldestLine(): void {
+        if (this.outputAnchor !== 0) {
+            this.showScrollbar("output");
+        }
         this.outputAnchor = 0;
 
         this.requestRender();
     }
 
     private followNewestLine(): void {
+        if (this.outputAnchor !== undefined) {
+            this.showScrollbar("output");
+        }
         this.outputAnchor = undefined;
 
         this.requestRender();
+    }
+
+    private hideScrollbar(pane: "jobs" | "output"): void {
+        clearTimeout(this.scrollbarTimers[pane]);
+        delete this.scrollbarTimers[pane];
+    }
+
+    private showScrollbar(pane: "jobs" | "output"): void {
+        this.hideScrollbar(pane);
+        this.scrollbarTimers[pane] = setTimeout(() => {
+            delete this.scrollbarTimers[pane];
+            this.requestRender();
+        }, SCROLLBAR_HIDE_DELAY_MS);
+    }
+
+    private withScrollbar(
+        line: string,
+        pane: "jobs" | "output",
+        row: number,
+        start: number,
+        height: number,
+        total: number,
+    ): string {
+        if (!this.scrollbarTimers[pane] || height <= 0 || total <= height) {
+            return line;
+        }
+        const thumbHeight = Math.max(Math.min(2, height), Math.round((height * height) / total));
+        const thumbTop = Math.round((start / (total - height)) * (height - thumbHeight));
+        const thumb = row >= thumbTop && row < thumbTop + thumbHeight;
+        // Both panes reserve right padding, so revealing the bar never reflows or covers text.
+        return line.slice(0, -1) +
+            this.theme.fg(thumb ? "scrollbarThumb" : "scrollbarTrack", thumb ? "┃" : "│");
     }
 
     private selectedJob(): Readonly<ShellJob> | undefined {
