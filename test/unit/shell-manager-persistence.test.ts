@@ -156,6 +156,7 @@ describe("ShellManager persistence", () => {
                 failedCount: 0,
                 killedCount: 0,
             }, "the snapshot must carry the counters as they were written");
+            assert.equal("inspectorIndex" in snapshot, false, "the snapshot must not carry the inspector's remembered shell");
 
             const saved = snapshot.jobs[0]!;
             assert.equal(saved.id, "job-a", "the job id must survive the round trip");

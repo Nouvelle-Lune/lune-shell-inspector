@@ -439,6 +439,19 @@ describe("ShellManager", () => {
 
             assert.deepEqual(seen, [0], "an empty clear must still reach the dock");
         });
+
+        it("resets the inspector's remembered shell", () => {
+            // Contract: the remembered position is memory-only view state; clearing the jobs makes it
+            // meaningless, which is what keeps a new session (session_start clears) on the first shell.
+            const manager = new ShellManager();
+            startRunningJob(manager, { id: "job-a" });
+            startRunningJob(manager, { id: "job-b" });
+            manager.setInspectorIndex(1);
+
+            manager.clearAllJobs();
+
+            assert.equal(manager.getInspectorIndex(), 0, "clearing the jobs must reset the remembered shell");
+        });
     });
 
     describe("clearJob", () => {

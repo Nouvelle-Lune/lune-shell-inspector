@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- **The `/shell` inspector remembers the selected shell.** Closing the overlay and reopening `/shell`
+  resumes on the shell that was selected last instead of jumping back to the first entry. The
+  position is memory-only view state: it is not written to the session snapshot, and clearing the
+  shell list (new session, shutdown, tree navigation) resets it to the first shell.
+
 ### Changed
 
 - **Background shell notifications now appear in the transcript.** A settled shell - or one batch of

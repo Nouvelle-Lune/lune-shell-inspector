@@ -116,6 +116,10 @@ export class ShellInspector implements Component {
         this.terminalRows = terminalRows;
         this.theme = theme;
 
+        // The index is memory-only state on the manager: reopening the overlay resumes the last
+        // selection, while a fresh session starts on the first shell.
+        this.selectedIndex = shellManager.getInspectorIndex();
+
         this.unsubscribeJobs = shellManager.subscribe(() => {
             this.syncRefreshTimer();
             this.requestRender();
@@ -279,6 +283,7 @@ export class ShellInspector implements Component {
         }
 
         this.selectedIndex = index;
+        shellManager.setInspectorIndex(index);
 
         // A different job has a different output; reading it from the middle would be confusing.
         this.outputAnchor = undefined;
@@ -298,6 +303,9 @@ export class ShellInspector implements Component {
         } else {
             this.selectedIndex = Math.min(this.selectedIndex, jobs.length - 1);
         }
+
+        // The clamped index is what the user sees, so it is also what a later reopen should restore.
+        shellManager.setInspectorIndex(this.selectedIndex);
 
         const bodyHeight = this.bodyHeight();
 

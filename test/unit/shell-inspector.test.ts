@@ -123,7 +123,12 @@ describe("shell inspector", () => {
         renderRequests = 0;
         closeRequests = 0;
 
-        inspector = new ShellInspector(
+        inspector = createInspector();
+    });
+
+    /** Build the inspector the way the `/shell` overlay factory does. */
+    function createInspector(): ShellInspector {
+        return new ShellInspector(
             { ui: { theme: stub.theme } } as unknown as ExtensionContext,
             () => {
                 renderRequests += 1;
@@ -134,7 +139,7 @@ describe("shell inspector", () => {
             () => TERMINAL_ROWS,
             stub.theme,
         );
-    });
+    }
 
     afterEach(() => {
         shellManager.clearAllJobs();
@@ -406,6 +411,44 @@ describe("shell inspector", () => {
 
         assert.equal(visibleOutput().at(-1), "line 40", "the previous job must reset to its newest output");
         assert.equal(pausedMarker(), undefined, "switching back must not restore the old pause");
+    });
+
+    it("reopens on the shell that was selected when it closed", async () => {
+        await addJob("job-a", "cmd-a", prefixedOutput("a", 3));
+        await addJob("job-b", "cmd-b", prefixedOutput("b", 3));
+
+        press("j"); // select job-b
+
+        inspector.dispose();
+        inspector = createInspector();
+
+        assert.deepEqual(
+            visibleOutput(),
+            ["b 1", "b 2", "b 3"],
+            "reopening the inspector must show the shell that was selected before",
+        );
+        assert.ok(
+            frame().lines.map(leftCell).some((cell) => cell.startsWith("› ● cmd-b")),
+            `the reopened inspector must highlight that shell, got ${JSON.stringify(frame().lines.map(leftCell))}`,
+        );
+    });
+
+    it("reopens on the first shell after the job list was cleared", async () => {
+        await addJob("job-a", "cmd-a", prefixedOutput("a", 3));
+        await addJob("job-b", "cmd-b", prefixedOutput("b", 3));
+
+        press("j"); // select job-b
+
+        inspector.dispose();
+        shellManager.clearAllJobs();
+        await addJob("job-c", "cmd-c", prefixedOutput("c", 3));
+        inspector = createInspector();
+
+        assert.deepEqual(
+            visibleOutput(),
+            ["c 1", "c 2", "c 3"],
+            "a cleared job list must reopen on its first shell again",
+        );
     });
 
     it("keeps plain j and k on job selection instead of scrolling", async () => {

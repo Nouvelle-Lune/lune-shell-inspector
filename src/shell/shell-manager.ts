@@ -108,6 +108,15 @@ export class ShellManager {
     private readonly jobs = new Map<string, ShellJob>();
     private readonly listeners = new Set<ShellManagerListener>();
     readonly jobsStatusStat: JobsStatusStat;
+
+    /**
+     * 0-based index of the shell the inspector last showed.
+     *
+     * Memory-only view state: it stays out of the session snapshot, so a reloaded, resumed or
+     * tree-restored session opens the inspector on the first shell again.
+     */
+    private inspectorIndex = 0;
+
     constructor() {
         this.jobsStatusStat = {
             runningCount: 0,
@@ -185,6 +194,7 @@ export class ShellManager {
         // clear the manager status before emitting the jobs-cleared event
         this.jobs.clear();
         this.clearManagerstatus();
+        this.inspectorIndex = 0;
         this.emit({
             type: "jobs-cleared"
         });
@@ -284,6 +294,14 @@ export class ShellManager {
 
     getAllJobsList(): readonly Readonly<ShellJob>[] {
         return Array.from(this.jobs.values());
+    }
+
+    getInspectorIndex(): number {
+        return this.inspectorIndex;
+    }
+
+    setInspectorIndex(index: number): void {
+        this.inspectorIndex = index;
     }
 
     getRunningJobsList(): readonly Readonly<ShellJob>[] {

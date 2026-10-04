@@ -96,6 +96,8 @@ Keyboard controls:
 
 Killing a running shell stops its process tree but keeps it in the list, with its output still readable. Clearing a completed, failed, or killed shell removes it from the list once you are done with it.
 
+The inspector remembers which shell you were viewing: close it and reopen `/shell` and the selection is where you left it. That position lives in memory only, so a reloaded or resumed session opens on the first shell again.
+
 In pi's fullscreen mode (the default since pi 1.0.0), the mouse works too: the wheel scrolls the output pane or moves the selection over the job list, and clicking a job selects it. Regular mode leaves the mouse to the terminal, so every action keeps its key.
 
 Output follows the newest lines by default. Scrolling upward pauses that follow behavior so new output does not pull the viewport away from what you are reading. While paused, a `[ ↓ Back to bottom · End ]` label appears on the separator below the output; click it or press `End` to follow the newest lines again.
