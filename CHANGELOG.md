@@ -18,6 +18,12 @@
   message instead of storing a second copy; job ids stay in the message, not in the row, because
   only the agent needs them.
 
+### Fixed
+
+- **Inspector output wraps instead of truncating long lines.** The detail pane reflows output to its
+  width, preserving long lines and wide characters without ellipses. Scrolling moves through the
+  wrapped rows, so content taller than the pane remains readable with the existing controls.
+
 ## [1.1.0] - 2026-10-02
 
 ### Added

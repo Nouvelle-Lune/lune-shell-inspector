@@ -76,7 +76,7 @@ export class ShellInspector implements Component {
     private refreshTimer: ReturnType<typeof setInterval> | undefined;
 
     /**
-     * First visible output line; undefined follows the newest output.
+     * First visible wrapped output row; undefined follows the newest output.
      *
      * An absolute anchor (not an offset from the tail) is what makes scrolling a pause: with a
      * tail-relative offset, streamed lines would drag the viewport along while the user reads.
@@ -84,6 +84,7 @@ export class ShellInspector implements Component {
     private outputAnchor: number | undefined;
     /** Output rows the last render could show; key handling needs it to clamp the anchor. */
     private outputRows = 0;
+    private outputWidth = 1;
 
     /**
      * Pane layout of the last frame. Mouse events arrive as overlay-local cells, so hit-testing
@@ -563,7 +564,9 @@ export class ShellInspector implements Component {
             rows.push(...this.wrap(`Error: ${job.error}`, contentWidth, "error"));
         }
 
-        const output = shellManager.getScreenLines(job.id);
+        this.outputWidth = contentWidth;
+        const screen = shellManager.getScreenLines(job.id);
+        const output = this.wrapOutput(screen);
 
         // The blank line and the Output header stay fixed, so the scrolling window gets what is
         // left of the body.
@@ -572,7 +575,7 @@ export class ShellInspector implements Component {
 
         const header = [
             this.theme.bold("Output"),
-            this.theme.fg("muted", ` · ${output.length} ${output.length === 1 ? "line" : "lines"}`),
+            this.theme.fg("muted", ` · ${screen.length} ${screen.length === 1 ? "line" : "lines"}`),
         ];
 
         if (window.newestHidden > 0) {
@@ -603,7 +606,7 @@ export class ShellInspector implements Component {
     }
 
     /**
-     * Moves the output pane by `step` lines, entering pause mode from the tail and leaving it again
+     * Moves the output pane by `step` wrapped rows, entering pause mode from the tail and leaving it again
      * once the newest line is back in view.
      */
     private scrollOutput(step: number): void {
@@ -613,7 +616,7 @@ export class ShellInspector implements Component {
             return;
         }
 
-        const lineCount = shellManager.getScreenLines(job.id).length;
+        const lineCount = this.wrapOutput(shellManager.getScreenLines(job.id)).length;
         const tailStart = Math.max(0, lineCount - this.outputRows);
 
         if (this.outputAnchor === undefined) {
@@ -631,6 +634,13 @@ export class ShellInspector implements Component {
         }
 
         this.requestRender();
+    }
+
+    private wrapOutput(lines: string[]): string[] {
+        // Scroll coordinates must use the same visual rows as the last rendered pane.
+        return lines.flatMap((line) =>
+            line === "" ? [""] : wrapTextWithAnsi(line, this.outputWidth),
+        );
     }
 
     private jumpToOldestLine(): void {
