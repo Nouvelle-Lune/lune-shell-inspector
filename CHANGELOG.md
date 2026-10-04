@@ -2,8 +2,6 @@
 
 ## [Unreleased]
 
-## [1.2.0] - 2026-10-05
-
 ### Added
 
 - **Auto-hiding scrollbars in `/shell`.** Overflowing output and shell lists now show themed
