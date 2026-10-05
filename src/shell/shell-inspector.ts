@@ -3,38 +3,28 @@ import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
     Key,
     matchesKey,
-    truncateToWidth,
-    visibleWidth,
-    wrapTextWithAnsi,
     type Component,
     type TuiMouseEvent,
     type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 
-import { shellManager, type ShellJob, type ShellJobStatus } from "./shell-manager.ts";
+import { FooterNotice } from "./inspector/footer-notice.ts";
+import {
+    assembleFrame,
+    renderBottomSeparator,
+    renderFooter,
+    renderHeader,
+} from "./inspector/frame.ts";
+import { BODY_TOP, listWindowStart, paneGeometry, type PaneGeometry } from "./inspector/geometry.ts";
+import { CommandPreviews, type ThemeColor } from "./inspector/job-format.ts";
+import { OutputRowsCache } from "./inspector/output-rows.ts";
+import { OutputViewport } from "./inspector/output-viewport.ts";
+import { renderDetails, renderEmptyList, renderJobList } from "./inspector/panes.ts";
+import { ScrollbarVisibility } from "./inspector/scrollbar.ts";
 import { formatShellCommand } from "./shell-command.ts";
+import { shellManager } from "./shell-manager.ts";
 
-type ThemeColor = Parameters<Theme["fg"]>[0];
-
-const LEFT_PANE_RATIO = 0.31;
-const LEFT_PANE_MIN_WIDTH = 22;
-const LEFT_PANE_MAX_WIDTH = 40;
-const RIGHT_PANE_MIN_WIDTH = 28;
-
-// The overlay only caps itself at 75% of the terminal, so the body height has
-// to leave room for the six frame lines (top, header, two separators, footer,
-// bottom) or the frame gets clipped on short terminals.
-const OVERLAY_HEIGHT_RATIO = 0.75;
-const FRAME_HEIGHT = 6;
-const BODY_MIN_HEIGHT = 8;
-const BODY_MAX_HEIGHT = 18;
-// Top border, header and the separator above the panes.
-const BODY_TOP = 3;
-
-const FOOTER_NOTICE_DURATION_MS = 1800;
-const SCROLLBAR_HIDE_DELAY_MS = 1000;
-
-const BACK_TO_BOTTOM_LABEL = "[ ↓ Back to bottom · End ]";
+const REFRESH_INTERVAL_MS = 1000;
 
 export async function openShellInspector(ctx: ExtensionContext): Promise<void> {
     await ctx.ui.custom<void>(
@@ -65,6 +55,17 @@ export async function openShellInspector(ctx: ExtensionContext): Promise<void> {
     );
 }
 
+/**
+ * Pane layout of the last frame. Mouse events arrive as overlay-local cells, so hit-testing
+ * has to use the geometry the user actually sees rather than recompute it from a new width.
+ */
+interface FrameLayout {
+    geometry: PaneGeometry;
+    listStart: number;
+    /** Columns of the back-to-bottom label on the bottom separator, while one is drawn. */
+    backToBottom?: { start: number; end: number };
+}
+
 export class ShellInspector implements Component {
     private readonly ctx: ExtensionContext;
     private readonly requestRender: () => void;
@@ -76,37 +77,13 @@ export class ShellInspector implements Component {
     private unsubscribeJobs: (() => void) | undefined;
     private refreshTimer: ReturnType<typeof setInterval> | undefined;
 
-    /**
-     * First visible wrapped output row; undefined follows the newest output.
-     *
-     * An absolute anchor (not an offset from the tail) is what makes scrolling a pause: with a
-     * tail-relative offset, streamed lines would drag the viewport along while the user reads.
-     */
-    private outputAnchor: number | undefined;
-    /** Output rows the last render could show; key handling needs it to clamp the anchor. */
-    private outputRows = 0;
+    private readonly viewport = new OutputViewport();
+    private readonly outputs = new OutputRowsCache();
+    private readonly previews = new CommandPreviews();
+    private readonly scrollbars: ScrollbarVisibility;
+    private readonly footerNotice: FooterNotice;
     private outputWidth = 1;
-    private readonly scrollbarTimers: Partial<
-        Record<"jobs" | "output", ReturnType<typeof setTimeout>>
-    > = {};
-
-    /**
-     * Pane layout of the last frame. Mouse events arrive as overlay-local cells, so hit-testing
-     * has to use the geometry the user actually sees rather than recompute it from a new width.
-     */
-    private paneLayout:
-        | {
-              bodyHeight: number;
-              rightStart: number;
-              listStart: number;
-              /** Columns of the back-to-bottom label on the bottom separator, while one is drawn. */
-              backToBottom?: { start: number; end: number };
-          }
-        | undefined;
-
-    /** Footer notice to display messages at the bottom of the inspector. */
-    private footerNotice: { text: string; color: ThemeColor } | undefined;
-    private footerNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+    private layout: FrameLayout | undefined;
 
     constructor(
         ctx: ExtensionContext,
@@ -120,6 +97,9 @@ export class ShellInspector implements Component {
         this.close = close;
         this.terminalRows = terminalRows;
         this.theme = theme;
+
+        this.scrollbars = new ScrollbarVisibility(() => this.requestRender());
+        this.footerNotice = new FooterNotice(() => this.requestRender());
 
         // The index is memory-only state on the manager: reopening the overlay resumes the last
         // selection, while a fresh session starts on the first shell.
@@ -148,34 +128,18 @@ export class ShellInspector implements Component {
 
         if (data === "x") {
             const chosenJob = jobs[this.selectedIndex];
-            if (!chosenJob) {
-                return;
+
+            if (chosenJob) {
+                shellManager.settleJob(chosenJob.id, {
+                    type: "killed",
+                    error: "Shell killed by user",
+                });
             }
-            shellManager.settleJob(chosenJob.id, {
-                type: "killed",
-                error: "Shell killed by user",
-            });
             return;
         }
 
         if (data === "c") {
-            const chosenJob = jobs[this.selectedIndex];
-
-            if (!chosenJob) {
-                return;
-            }
-
-            const cleared = shellManager.clearJob(chosenJob.id);
-
-            if (cleared) {
-                this.outputAnchor = undefined;
-                this.showFooterNotice(
-                    `Cleared ${formatShellCommand(chosenJob.label ?? chosenJob.command, 28)}`,
-                    "success",
-                );
-            } else {
-                this.showFooterNotice(`Clear failed, only completed, failed, or killed`, "accent");
-            }
+            this.clearSelectedJob(jobs[this.selectedIndex]);
             return;
         }
 
@@ -189,26 +153,21 @@ export class ShellInspector implements Component {
             return;
         }
 
-        const scrollStep =
-            matchesKey(data, Key.shift("up")) || matchesKey(data, Key.shift("k"))
-                ? -1
-                : matchesKey(data, Key.shift("down")) || matchesKey(data, Key.shift("j"))
-                  ? 1
-                  : 0;
-
-        if (scrollStep !== 0) {
-            this.scrollOutput(scrollStep);
+        if (matchesKey(data, Key.shift("up")) || matchesKey(data, Key.shift("k"))) {
+            this.scrollOutput(-1);
             return;
         }
 
-        const step =
-            matchesKey(data, Key.down) || data === "j"
-                ? 1
-                : matchesKey(data, Key.up) || data === "k"
-                  ? -1
-                  : 0;
+        if (matchesKey(data, Key.shift("down")) || matchesKey(data, Key.shift("j"))) {
+            this.scrollOutput(1);
+            return;
+        }
 
-        this.moveSelection(step);
+        if (matchesKey(data, Key.down) || data === "j") {
+            this.moveSelection(1);
+        } else if (matchesKey(data, Key.up) || data === "k") {
+            this.moveSelection(-1);
+        }
     }
 
     /**
@@ -216,16 +175,18 @@ export class ShellInspector implements Component {
      * action below also has a key.
      */
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-        const layout = this.paneLayout;
+        const layout = this.layout;
 
         if (!layout) {
             return undefined;
         }
 
+        const { bodyHeight, rightStart } = layout.geometry;
+
         if (event.type === "wheel") {
             const delta = event.wheelDelta ?? 0;
 
-            if (event.x >= layout.rightStart) {
+            if (event.x >= rightStart) {
                 this.scrollOutput(delta);
             } else {
                 this.moveSelection(delta);
@@ -245,7 +206,7 @@ export class ShellInspector implements Component {
 
         if (
             label &&
-            event.y === BODY_TOP + layout.bodyHeight &&
+            event.y === BODY_TOP + bodyHeight &&
             event.x >= label.start &&
             event.x < label.end
         ) {
@@ -256,164 +217,107 @@ export class ShellInspector implements Component {
 
         const row = event.y - BODY_TOP;
         const index = layout.listStart + row;
+        const jobCount = shellManager.getAllJobsList().length;
 
         if (
             event.x < 1 ||
-            event.x >= layout.rightStart - 1 ||
+            event.x >= rightStart - 1 ||
             row < 0 ||
-            row >= layout.bodyHeight ||
-            index >= shellManager.getAllJobsList().length
+            row >= bodyHeight ||
+            index >= jobCount
         ) {
             return undefined;
         }
 
-        this.selectJob(index);
+        this.selectJob(index, jobCount);
 
         return { handled: true };
     }
 
-    private moveSelection(step: number): void {
-        const jobs = shellManager.getAllJobsList();
-
-        if (jobs.length === 0 || step === 0) {
-            return;
-        }
-
-        this.selectJob(Math.min(jobs.length - 1, Math.max(0, this.selectedIndex + step)));
-    }
-
-    private selectJob(index: number): void {
-        if (index === this.selectedIndex) {
-            return;
-        }
-
-        this.selectedIndex = index;
-        shellManager.setInspectorIndex(index);
-
-        // A different job has a different output; reading it from the middle would be confusing.
-        this.outputAnchor = undefined;
-        this.hideScrollbar("output");
-        if (this.paneLayout && shellManager.getAllJobsList().length > this.paneLayout.bodyHeight) {
-            this.showScrollbar("jobs");
-        }
-
-        this.requestRender();
-    }
-
     render(width: number): string[] {
         const jobs = shellManager.getAllJobsList();
+        const hasJobs = jobs.length > 0;
 
         this.syncRefreshTimer();
 
-        if (jobs.length === 0) {
-            this.selectedIndex = 0;
-            this.outputAnchor = undefined;
-            this.outputRows = 0;
-        } else {
+        if (hasJobs) {
             this.selectedIndex = Math.min(this.selectedIndex, jobs.length - 1);
+        } else {
+            this.selectedIndex = 0;
+            this.viewport.reset();
         }
 
         // The clamped index is what the user sees, so it is also what a later reopen should restore.
         shellManager.setInspectorIndex(this.selectedIndex);
 
-        const bodyHeight = this.bodyHeight();
+        const geometry = paneGeometry(width, this.terminalRows());
+        const { bodyHeight, leftWidth, rightWidth } = geometry;
+        const listStart = listWindowStart(this.selectedIndex, jobs.length, bodyHeight);
 
-        const innerWidth = Math.max(
-            LEFT_PANE_MIN_WIDTH + RIGHT_PANE_MIN_WIDTH + 1,
-            width - 2, // Leave one column for each frame border: │ content │
-        );
-
-        const leftWidth = Math.min(
-            LEFT_PANE_MAX_WIDTH,
-            Math.max(LEFT_PANE_MIN_WIDTH, Math.round(innerWidth * LEFT_PANE_RATIO)),
-            innerWidth - RIGHT_PANE_MIN_WIDTH - 1,
-        );
-
-        const rightWidth = innerWidth - leftWidth - 1; // Leave one column for the separator: │ left │ right │
-        /**
-         * Render the left pane with the list of jobs.
-         * › ● npm test                    running
-         *   ● npm example bash ...        running
-         */
-        const hasJobs = jobs.length > 0;
-
-        const listStart = Math.min(
-            Math.max(0, this.selectedIndex - Math.floor(bodyHeight / 2)),
-            Math.max(0, jobs.length - bodyHeight),
-        );
-
-        // Columns: │ left │ right │
-        this.paneLayout = { bodyHeight, rightStart: leftWidth + 2, listStart };
+        const layout: FrameLayout = { geometry, listStart };
+        this.layout = layout;
 
         const left = hasJobs
-            ? this.renderJobs(jobs, leftWidth, bodyHeight, listStart)
-            : this.fill(
-                  [this.cell(this.theme.fg("muted", "No background shell running"), leftWidth)],
+            ? renderJobList(
+                  this.theme,
+                  this.previews,
+                  {
+                      visibleJobs: jobs.slice(listStart, listStart + bodyHeight),
+                      start: listStart,
+                      totalJobs: jobs.length,
+                      selectedIndex: this.selectedIndex,
+                      showScrollbar: this.scrollbars.isVisible("jobs"),
+                  },
                   leftWidth,
                   bodyHeight,
-              );
-        /**
-         * Render the right pane with the details of the selected job.
-         */
-        const right = hasJobs
-            ? this.renderDetails(jobs[this.selectedIndex]!, rightWidth, bodyHeight)
-            : this.fill([], rightWidth, bodyHeight);
+              )
+            : renderEmptyList(this.theme, leftWidth, bodyHeight);
 
-        const lines: string[] = [
-            this.frame(`┌${"─".repeat(innerWidth)}┐`),
-            this.frame("│") + this.renderHeader(innerWidth) + this.frame("│"),
-            this.frame(`├${"─".repeat(leftWidth)}┬${"─".repeat(rightWidth)}┤`),
-        ];
+        let right: string[] = [];
 
-        for (let i = 0; i < bodyHeight; i++) {
-            lines.push(
-                this.frame("│") +
-                    this.pad(left[i] ?? "", leftWidth) +
-                    this.frame("│") +
-                    this.pad(right[i] ?? "", rightWidth) +
-                    this.frame("│"),
+        if (hasJobs) {
+            const job = jobs[this.selectedIndex]!;
+
+            this.outputWidth = rightWidth - 2;
+            right = renderDetails(
+                this.theme,
+                this.previews,
+                {
+                    job,
+                    output: this.outputs.get(shellManager, job.id, this.outputWidth),
+                    viewport: this.viewport,
+                    showScrollbar: this.scrollbars.isVisible("output"),
+                },
+                rightWidth,
+                bodyHeight,
             );
         }
 
-        lines.push(
-            this.renderBottomSeparator(leftWidth, rightWidth, hasJobs),
-            this.frame("│") + this.renderFooter(innerWidth) + this.frame("│"),
-            this.frame(`└${"─".repeat(innerWidth)}┘`),
+        // The details pane clamps the output position, so the separator can only read it afterwards.
+        const header = renderHeader(
+            this.theme,
+            geometry.innerWidth,
+            jobs.length,
+            shellManager.jobsStatusStat.runningCount,
+        );
+        const separator = renderBottomSeparator(
+            this.theme,
+            geometry,
+            hasJobs && this.viewport.paused,
         );
 
-        return lines;
+        layout.backToBottom = separator.label;
+
+        return assembleFrame(this.theme, geometry, {
+            header,
+            left,
+            right,
+            separator: separator.line,
+            footer: renderFooter(this.theme, geometry.innerWidth, this.footerNotice.active),
+        });
     }
 
     invalidate(): void {}
-
-    /**
-     * The separator under the panes; while the output is paused it carries a clickable
-     * back-to-bottom label centred under the right pane, so the label never covers output.
-     */
-    private renderBottomSeparator(leftWidth: number, rightWidth: number, hasJobs: boolean): string {
-        const layout = this.paneLayout!;
-        const labelWidth = visibleWidth(BACK_TO_BOTTOM_LABEL);
-        const paused = hasJobs && this.outputAnchor !== undefined;
-
-        // Keep at least one dash on each side so the label still reads as part of the frame.
-        if (!paused || rightWidth < labelWidth + 2) {
-            layout.backToBottom = undefined;
-
-            return this.frame(`├${"─".repeat(leftWidth)}┴${"─".repeat(rightWidth)}┤`);
-        }
-
-        const before = Math.floor((rightWidth - labelWidth) / 2);
-        const after = rightWidth - labelWidth - before;
-        const start = layout.rightStart + before;
-
-        layout.backToBottom = { start, end: start + labelWidth };
-
-        return (
-            this.frame(`├${"─".repeat(leftWidth)}┴${"─".repeat(before)}`) +
-            this.theme.fg("accent", BACK_TO_BOTTOM_LABEL) +
-            this.frame(`${"─".repeat(after)}┤`)
-        );
-    }
 
     /** Called by the overlay on teardown, and by the Esc path before closing. */
     dispose(): void {
@@ -424,324 +328,98 @@ export class ShellInspector implements Component {
             this.refreshTimer = undefined;
         }
 
-        if (this.footerNoticeTimer) {
-            clearTimeout(this.footerNoticeTimer);
-            this.footerNoticeTimer = undefined;
-        }
-
-        this.hideScrollbar("jobs");
-        this.hideScrollbar("output");
+        this.footerNotice.dispose();
+        this.scrollbars.dispose();
+        this.outputs.clear();
+        this.previews.clear();
 
         this.unsubscribeJobs?.();
         this.unsubscribeJobs = undefined;
     }
 
-    /** Calculate the height of shell inspector. */
-    private bodyHeight(): number {
-        return Math.min(
-            BODY_MAX_HEIGHT,
-            Math.max(
-                BODY_MIN_HEIGHT,
-                Math.floor(this.terminalRows() * OVERLAY_HEIGHT_RATIO) - FRAME_HEIGHT,
-            ),
-        );
-    }
-
-    private renderHeader(width: number): string {
-        // Everything below goes through this.cell(), so every budget is one
-        // padded cell wide: the pane width minus the two padding columns.
-        const contentWidth = width - 2;
-
-        const title = this.theme.bold("Shell inspector");
-
-        const status = this.renderHeaderStatus(Math.max(0, contentWidth - visibleWidth(title) - 1));
-
-        return this.cell(
-            title +
-                " ".repeat(Math.max(1, contentWidth - visibleWidth(title) - visibleWidth(status))) +
-                status,
-            width,
-        );
-    }
-
-    private renderHeaderStatus(maxWidth: number): string {
-        const total = shellManager.getAllJobsList().length;
-        const running = shellManager.jobsStatusStat.runningCount;
-        const shells = `${total} ${total === 1 ? "shell" : "shells"}`;
-
-        const text =
-            this.theme.fg("muted", shells) +
-            (running > 0 ? this.theme.fg("accent", ` · ${running} running`) : "");
-
-        return truncateToWidth(text, maxWidth, "…");
-    }
-
-    /** Show a temporary notice in the footer with the specified text and color. */
-    private showFooterNotice(text: string, color: ThemeColor): void {
-        this.footerNotice = { text, color };
-
-        if (this.footerNoticeTimer) {
-            clearTimeout(this.footerNoticeTimer);
-        }
-
-        this.footerNoticeTimer = setTimeout(() => {
-            this.footerNotice = undefined;
-            this.footerNoticeTimer = undefined;
-            this.requestRender();
-        }, FOOTER_NOTICE_DURATION_MS);
-
-        this.requestRender();
-    }
-
-    /** Render the footer of the shell inspector. */
-    private renderFooter(width: number): string {
-        if (this.footerNotice) {
-            return this.cell(this.theme.fg(this.footerNotice.color, this.footerNotice.text), width);
-        }
-
-        return this.cell(
-            this.theme.fg(
-                "dim",
-                "↑↓/jk shell · ⇧↑↓/jk scroll · Home/End · x to kill · c to clear · Esc to close",
-            ),
-            width,
-        );
-    }
-
-    private renderJobs(
-        jobs: readonly Readonly<ShellJob>[],
-        width: number,
-        bodyHeight: number,
-        start: number,
-    ): string[] {
-        const contentWidth = width - 2;
-
-        const rows: string[] = [];
-
-        for (const [index, job] of jobs.entries()) {
-            if (index < start) {
-                continue;
-            }
-
-            if (index >= start + bodyHeight) {
-                break;
-            }
-
-            const color = statusColor(job.status);
-            const status = this.theme.fg(color, job.status);
-            const selected = index === this.selectedIndex;
-
-            // Four columns go to the cursor and the status dot; the name then
-            // reserves a gap column so it never touches the status text.
-            const nameWidth = Math.max(4, contentWidth - 5 - visibleWidth(status));
-
-            const name = selected
-                ? this.theme.bold(formatShellCommand(job.label ?? job.command, nameWidth))
-                : formatShellCommand(job.label ?? job.command, nameWidth);
-
-            const gap = Math.max(1, contentWidth - 4 - visibleWidth(name) - visibleWidth(status));
-
-            rows.push(
-                this.cell(
-                    (selected ? this.theme.fg("accent", "›") : " ") +
-                        ` ${this.theme.fg(color, "●")} ${name}` +
-                        `${" ".repeat(gap)}${status}`,
-                    width,
-                ),
-            );
-        }
-
-        const filled = this.fill(rows, width, bodyHeight);
-        return filled.map((line, index) =>
-            this.withScrollbar(line, "jobs", index, start, bodyHeight, jobs.length),
-        );
-    }
-
-    private renderDetails(job: Readonly<ShellJob>, width: number, bodyHeight: number): string[] {
-        const contentWidth = width - 2;
-
-        const color = statusColor(job.status);
-
-        const command = this.theme.bold(
-            formatShellCommand(job.command, Math.max(4, contentWidth - 2)),
-        );
-
-        const rows: string[] = [
-            this.cell(`${this.theme.fg(color, "●")} ${command}`, width),
-            ...this.wrap(
-                this.theme.fg(color, job.status) + this.theme.fg("muted", ` · ${jobMeta(job)}`),
-                contentWidth,
-            ),
-        ];
-
-        if (job.error) {
-            rows.push(...this.wrap(`Error: ${job.error}`, contentWidth, "error"));
-        }
-
-        this.outputWidth = contentWidth;
-        const screen = shellManager.getScreenLines(job.id);
-        const output = this.wrapOutput(screen);
-
-        // The blank line and the Output header stay fixed, so the scrolling window gets what is
-        // left of the body.
-        const available = Math.max(0, bodyHeight - rows.length - 2);
-        const window = this.outputWindow(output.length, available);
-
-        const header = [
-            this.theme.bold("Output"),
-            this.theme.fg("muted", ` · ${screen.length} ${screen.length === 1 ? "line" : "lines"}`),
-        ];
-
-        if (window.newestHidden > 0) {
-            header.push(this.theme.fg("warning", ` · paused ↑${window.newestHidden}`));
-        }
-
-        rows.push(this.cell("", width), this.cell(header.join(""), width));
-
-        if (output.length === 0) {
-            rows.push(
-                this.cell(
-                    this.theme.fg(
-                        "muted",
-                        job.status === "running" ? "no output yet" : "no output",
-                    ),
-                    width,
-                ),
-            );
-        } else if (window.count > 0) {
-            const visible = output.slice(window.start, window.start + window.count);
-
-            for (const [index, line] of visible.entries()) {
-                rows.push(
-                    this.withScrollbar(
-                        this.cell(line, width), "output", index, window.start, available, output.length,
-                    ),
-                );
-            }
-        }
-
-        return this.fill(rows, width, bodyHeight);
-    }
-
-    /**
-     * Moves the output pane by `step` wrapped rows, entering pause mode from the tail and leaving it again
-     * once the newest line is back in view.
-     */
-    private scrollOutput(step: number): void {
-        const job = this.selectedJob();
-
-        if (!job || this.outputRows === 0) {
+    private clearSelectedJob(job: Readonly<{ id: string; label?: string; command: string }> | undefined): void {
+        if (!job) {
             return;
         }
 
-        const lineCount = this.wrapOutput(shellManager.getScreenLines(job.id)).length;
-        const tailStart = Math.max(0, lineCount - this.outputRows);
-        const previousStart = this.outputAnchor ?? tailStart;
-
-        if (this.outputAnchor === undefined) {
-            if (step > 0) {
-                return;
-            }
-
-            this.outputAnchor = Math.max(0, tailStart + step);
+        if (shellManager.clearJob(job.id)) {
+            this.viewport.follow();
+            this.showNotice(`Cleared ${formatShellCommand(job.label ?? job.command, 28)}`, "success");
         } else {
-            this.outputAnchor = Math.min(tailStart, Math.max(0, this.outputAnchor + step));
+            this.showNotice("Clear failed, only completed, failed, or killed", "accent");
         }
+    }
 
-        if (this.outputAnchor >= tailStart) {
-            this.outputAnchor = undefined;
-        }
-
-        if ((this.outputAnchor ?? tailStart) !== previousStart) {
-            this.showScrollbar("output");
-        }
+    private showNotice(text: string, color: ThemeColor): void {
+        this.footerNotice.show(text, color);
         this.requestRender();
     }
 
-    private wrapOutput(lines: string[]): string[] {
-        // Scroll coordinates must use the same visual rows as the last rendered pane.
-        return lines.flatMap((line) =>
-            line === "" ? [""] : wrapTextWithAnsi(line, this.outputWidth),
+    private moveSelection(step: number): void {
+        const jobCount = shellManager.getAllJobsList().length;
+
+        if (jobCount === 0 || step === 0) {
+            return;
+        }
+
+        this.selectJob(Math.min(jobCount - 1, Math.max(0, this.selectedIndex + step)), jobCount);
+    }
+
+    private selectJob(index: number, jobCount: number): void {
+        if (index === this.selectedIndex) {
+            return;
+        }
+
+        this.selectedIndex = index;
+        shellManager.setInspectorIndex(index);
+
+        // A different job has a different output; reading it from the middle would be confusing.
+        this.viewport.follow();
+        this.scrollbars.hide("output");
+
+        if (this.layout && jobCount > this.layout.geometry.bodyHeight) {
+            this.scrollbars.show("jobs");
+        }
+
+        this.requestRender();
+    }
+
+    private scrollOutput(step: number): void {
+        const job = shellManager.getAllJobsList()[this.selectedIndex];
+
+        if (!job) {
+            return;
+        }
+
+        const result = this.viewport.scrollBy(step, () =>
+            this.outputs.get(shellManager, job.id, this.outputWidth),
         );
+
+        if (result === "ignored") {
+            return;
+        }
+
+        if (result === "moved") {
+            this.scrollbars.show("output");
+        }
+
+        this.requestRender();
     }
 
     private jumpToOldestLine(): void {
-        if (this.outputAnchor !== 0) {
-            this.showScrollbar("output");
+        if (this.viewport.jumpToOldest()) {
+            this.scrollbars.show("output");
         }
-        this.outputAnchor = 0;
 
         this.requestRender();
     }
 
     private followNewestLine(): void {
-        if (this.outputAnchor !== undefined) {
-            this.showScrollbar("output");
+        if (this.viewport.follow()) {
+            this.scrollbars.show("output");
         }
-        this.outputAnchor = undefined;
 
         this.requestRender();
-    }
-
-    private hideScrollbar(pane: "jobs" | "output"): void {
-        clearTimeout(this.scrollbarTimers[pane]);
-        delete this.scrollbarTimers[pane];
-    }
-
-    private showScrollbar(pane: "jobs" | "output"): void {
-        this.hideScrollbar(pane);
-        this.scrollbarTimers[pane] = setTimeout(() => {
-            delete this.scrollbarTimers[pane];
-            this.requestRender();
-        }, SCROLLBAR_HIDE_DELAY_MS);
-    }
-
-    private withScrollbar(
-        line: string,
-        pane: "jobs" | "output",
-        row: number,
-        start: number,
-        height: number,
-        total: number,
-    ): string {
-        if (!this.scrollbarTimers[pane] || height <= 0 || total <= height) {
-            return line;
-        }
-        const thumbHeight = Math.max(Math.min(2, height), Math.round((height * height) / total));
-        const thumbTop = Math.round((start / (total - height)) * (height - thumbHeight));
-        const thumb = row >= thumbTop && row < thumbTop + thumbHeight;
-        // Both panes reserve right padding, so revealing the bar never reflows or covers text.
-        return line.slice(0, -1) +
-            this.theme.fg(thumb ? "scrollbarThumb" : "scrollbarTrack", thumb ? "┃" : "│");
-    }
-
-    private selectedJob(): Readonly<ShellJob> | undefined {
-        return shellManager.getAllJobsList()[this.selectedIndex];
-    }
-
-    /**
-     * Visible slice of the output, clamped to what the body can show. The clamped anchor is stored
-     * back so the position stays valid when the output shrinks or the pane is resized.
-     */
-    private outputWindow(
-        lineCount: number,
-        available: number,
-    ): { start: number; count: number; newestHidden: number } {
-        this.outputRows = available;
-
-        const tailStart = Math.max(0, lineCount - available);
-
-        const start =
-            this.outputAnchor === undefined ? tailStart : Math.min(this.outputAnchor, tailStart);
-
-        // Landing on the newest line means following it again.
-        this.outputAnchor = start >= tailStart ? undefined : start;
-
-        return {
-            start,
-            count: Math.min(available, lineCount - start),
-            newestHidden: Math.max(0, lineCount - (start + available)),
-        };
     }
 
     private syncRefreshTimer(): void {
@@ -750,7 +428,7 @@ export class ShellInspector implements Component {
         if (hasRunningJobs && !this.refreshTimer) {
             this.refreshTimer = setInterval(() => {
                 this.requestRender();
-            }, 1000);
+            }, REFRESH_INTERVAL_MS);
         }
 
         if (!hasRunningJobs && this.refreshTimer) {
@@ -758,73 +436,4 @@ export class ShellInspector implements Component {
             this.refreshTimer = undefined;
         }
     }
-
-    private frame(text: string): string {
-        return this.theme.fg("border", text);
-    }
-
-    private cell(text: string, width: number): string {
-        return ` ${truncateToWidth(text, Math.max(0, width - 2), "…", true)} `;
-    }
-
-    private pad(text: string, width: number): string {
-        return text + " ".repeat(Math.max(0, width - visibleWidth(text)));
-    }
-
-    private fill(rows: string[], width: number, bodyHeight: number): string[] {
-        while (rows.length < bodyHeight) {
-            rows.push(" ".repeat(width));
-        }
-
-        return rows.slice(0, bodyHeight);
-    }
-
-    private wrap(text: string, width: number, color?: ThemeColor): string[] {
-        return wrapTextWithAnsi(text, width).map((line) =>
-            color ? this.theme.fg(color, line) : line,
-        );
-    }
-}
-
-function statusColor(status: ShellJobStatus): ThemeColor {
-    switch (status) {
-        case "running":
-            return "accent";
-        case "completed":
-            return "success";
-        case "failed":
-            return "error";
-        case "killed":
-            return "muted";
-    }
-}
-
-function jobMeta(job: Readonly<ShellJob>): string {
-    const parts = [job.cwd, formatDuration((job.finishedAt ?? Date.now()) - job.startedAt)];
-
-    if (job.exitCode !== undefined) {
-        parts.push(`exit ${job.exitCode}`);
-    }
-
-    return parts.join(" · ");
-}
-
-function formatDuration(ms: number): string {
-    if (ms < 1000) {
-        return `${ms}ms`;
-    }
-
-    const seconds = ms / 1000;
-
-    if (seconds < 60) {
-        return `${seconds.toFixed(1)}s`;
-    }
-
-    const minutes = Math.floor(seconds / 60);
-
-    if (minutes < 60) {
-        return `${minutes}m${Math.floor(seconds % 60)}s`;
-    }
-
-    return `${Math.floor(minutes / 60)}h${minutes % 60}m`;
 }

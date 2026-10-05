@@ -26,6 +26,18 @@
 - **Inspector output wraps instead of truncating long lines.** The detail pane reflows output to its
   width, preserving long lines and wide characters without ellipses. Scrolling moves through the
   wrapped rows, so content taller than the pane remains readable with the existing controls.
+- **`/shell` no longer lags while scrolling.** Every repaint re-read and re-wrapped the whole
+  scrollback, so a wheel tick over a 2000-line output cost ~18ms and a one-second refresh or
+  streaming burst ~9–11ms. Wrapped rows are now cached per screen revision and width, and a pane
+  that follows the newest output wraps only its last rows, which brings those frames to ~0.2–1.2ms.
+  `ShellManager` gains `getScreenRevision(id)` for readers that cache what they derive from a screen.
+
+### Refactored
+
+- **Split `shell-inspector.ts` into `src/shell/inspector/`.** The 830-line component is now a
+  ~440-line orchestrator for input, selection and timers, with layout, frame, panes, scrollbars,
+  footer notice, output rows and the output viewport in their own modules. Rendering and key
+  behavior are unchanged.
 
 ## [1.1.0] - 2026-10-02
 

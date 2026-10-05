@@ -25,6 +25,11 @@ const SCREEN_ROWS = 30;
 
 const SCREEN_SCROLLBACK = DEFAULT_MAX_LINES;
 
+// One counter for every emulator, so a revision also tells jobs apart: a reader's cache keyed by
+// revision can never serve the screen of a cleared job to a new job that reuses its id.
+let lastScreenRevision = 0;
+const screenRevisions = new WeakMap<XtermTerminal, number>();
+
 export type ShellJobStatus =
     | "running"
     | "completed"
@@ -287,6 +292,17 @@ export class ShellManager {
         return lines;
     }
 
+    /**
+     * Identifies the current content of the job's screen: it changes whenever the emulator has
+     * parsed new data, so a reader can reuse whatever it derived from the screen while it is equal.
+     *
+     * Appended bytes cannot stand in for it - xterm parses them on a later tick, and a reader that
+     * cached between the append and the parse would keep a stale screen forever.
+     */
+    getScreenRevision(id: string): number {
+        return screenRevisions.get(this.requireJob(id).terminal) ?? 0;
+    }
+
     getJob(id: string): Readonly<ShellJob> | undefined {
         // Readonly is compile-time only: callers get the live internal job.
         return this.jobs.get(id);
@@ -547,7 +563,7 @@ export class ShellManager {
 }
 
 function createScreen(): XtermTerminal {
-    return new Terminal({
+    const terminal = new Terminal({
         cols: SCREEN_COLS,
         rows: SCREEN_ROWS,
         scrollback: SCREEN_SCROLLBACK,
@@ -556,6 +572,11 @@ function createScreen(): XtermTerminal {
         // Reading the framebuffer is still gated behind xterm's proposed API.
         allowProposedApi: true,
     });
+
+    screenRevisions.set(terminal, ++lastScreenRevision);
+    terminal.onWriteParsed(() => screenRevisions.set(terminal, ++lastScreenRevision));
+
+    return terminal;
 }
 
 // Shared singleton: its state outlives extension reloads, which is why the
