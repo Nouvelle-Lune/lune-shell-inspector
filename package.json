@@ -1,6 +1,6 @@
 {
   "name": "lune-shell-inspector",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Shell dock and /shell inspector for pi's background bash jobs",
   "type": "module",
   "files": [
