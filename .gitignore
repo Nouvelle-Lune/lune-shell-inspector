@@ -28,4 +28,7 @@ Thumbs.db
 # scratch files
 .scratch/
 
+# Local docs
+docs/
+
 AGENTS.md
