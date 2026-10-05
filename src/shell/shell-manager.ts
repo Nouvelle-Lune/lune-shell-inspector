@@ -13,6 +13,8 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 
+import { ScreenFeed } from "./screen-feed.ts";
+
 /**
  * Geometry of the per-job VT emulator.
  *
@@ -29,6 +31,9 @@ const SCREEN_SCROLLBACK = DEFAULT_MAX_LINES;
 // revision can never serve the screen of a cleared job to a new job that reuses its id.
 let lastScreenRevision = 0;
 const screenRevisions = new WeakMap<XtermTerminal, number>();
+
+// Beside the terminal instead of on ShellJob: the job record is what tests and the snapshot see.
+const screenFeeds = new WeakMap<XtermTerminal, ScreenFeed>();
 
 export type ShellJobStatus =
     | "running"
@@ -193,7 +198,7 @@ export class ShellManager {
 
         // Dropping the map alone would leave every emulator and its emitters alive.
         for (const job of this.jobs.values()) {
-            job.terminal.dispose();
+            disposeScreen(job.terminal);
         }
 
         // clear the manager status before emitting the jobs-cleared event
@@ -239,7 +244,7 @@ export class ShellManager {
 
         // xterm parses queued writes on a later tick. Readers render after it: the TUI schedules
         // its frame through nextTick + setTimeout, while this write is parsed by the first timer.
-        job.terminal.write(chunk);
+        screenFeeds.get(job.terminal)?.write(chunk);
 
         this.emit({
             type: "output-updated",
@@ -517,7 +522,7 @@ export class ShellManager {
         }
         this.jobs.delete(id);
 
-        job.terminal.dispose();
+        disposeScreen(job.terminal);
 
         this.emit({
             type: "job-cleared",
@@ -575,8 +580,14 @@ function createScreen(): XtermTerminal {
 
     screenRevisions.set(terminal, ++lastScreenRevision);
     terminal.onWriteParsed(() => screenRevisions.set(terminal, ++lastScreenRevision));
+    screenFeeds.set(terminal, new ScreenFeed(terminal));
 
     return terminal;
+}
+
+function disposeScreen(terminal: XtermTerminal): void {
+    screenFeeds.get(terminal)?.dispose();
+    terminal.dispose();
 }
 
 // Shared singleton: its state outlives extension reloads, which is why the

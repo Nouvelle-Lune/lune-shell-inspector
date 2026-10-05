@@ -32,6 +32,12 @@
   that follows the newest output wraps only its last rows, which brings those frames to ~0.2–1.2ms.
   `ShellManager` gains `getScreenRevision(id)` for readers that cache what they derive from a screen.
 
+- **A flooding background shell no longer crashes the host.** Output that arrived faster than the
+  screen emulator parsed it (`yes`, a verbose build) piled up until xterm threw
+  `write data discarded` from the stream handler, which exited pi. Output is now fed to the
+  emulator with flow control that drops the oldest unparsed output, so the screen still ends with
+  the newest; the retained text and the spill file are unaffected.
+
 ### Refactored
 
 - **Split `shell-inspector.ts` into `src/shell/inspector/`.** The 830-line component is now a
