@@ -46,9 +46,9 @@
   },
   "dependencies": {
     "@xterm/headless": "^6.0.0",
-    "@nouvelle-lune/lune-dock-protocol": "file:../lune-dock-protocol"
+    "@lune_99/lune-dock-protocol": "0.1.0"
   },
-  "bundledDependencies": ["@nouvelle-lune/lune-dock-protocol"],
+  "bundledDependencies": ["@lune_99/lune-dock-protocol"],
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=1.0.0",
     "@earendil-works/pi-tui": ">=1.0.0",

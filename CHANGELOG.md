@@ -8,9 +8,7 @@
 
 ### Changed
 
-- **Protocol dependency path.** `@nouvelle-lune/lune-dock-protocol` now comes from its own
-  [`lune-dock-protocol`](https://github.com/Nouvelle-Lune/lune-dock-protocol) checkout through
-  `file:../lune-dock-protocol`. Reinstall dependencies after updating this checkout.
+- **Published protocol dependency.** Install and bundle `@lune_99/lune-dock-protocol@0.1.0` from npm.
 
 - **BREAKING: Lune Protocol v1 Draft 3 snapshots.** Publish plugin-styled, single-line base/detail/full Components instead of business summary fields. Idle providers stay registered; Dock owns density, visibility and order, while Enter opens the existing plugin UI. Update the host and both plugins together.
 

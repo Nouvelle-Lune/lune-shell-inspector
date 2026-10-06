@@ -1,6 +1,6 @@
 import type { ExtensionContext, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
-import { createDockContribution, type LuneDockSnapshot } from "@nouvelle-lune/lune-dock-protocol";
+import { createDockContribution, type LuneDockSnapshot } from "@lune_99/lune-dock-protocol";
 import { shellDock } from "./shell-dock.ts";
 import { collapseShellCommand } from "./shell-command.ts";
 import { openShellInspector } from "./shell-inspector.ts";
@@ -63,30 +63,60 @@ export class ShellDockContribution {
         const running = jobs.filter((job) => job.status === "running");
         let color: ThemeColor;
         let marker: string;
-        if (failed.some((job) => !this.acknowledged.has(job.id))) { color = "error"; marker = "✕"; }
-        else if (running.length > 0) { color = "warning"; marker = "◐"; }
-        else if (jobs.some((job) => job.status === "completed")) { color = "success"; marker = "●"; }
-        else if (jobs.length > 0) { color = "error"; marker = "✕"; }
-        else { color = "dim"; marker = "○"; }
-        const summary = jobs.length === 0 ? "idle" : [
-            running.length > 0 ? `${running.length} running` : undefined,
-            jobs.filter((job) => job.status === "completed").length > 0 ? `${jobs.filter((job) => job.status === "completed").length} completed` : undefined,
-            failed.length > 0 ? `${failed.length} failed/killed` : undefined,
-        ].filter(Boolean).join(" · ");
+        if (failed.some((job) => !this.acknowledged.has(job.id))) {
+            color = "error";
+            marker = "✕";
+        } else if (running.length > 0) {
+            color = "warning";
+            marker = "◐";
+        } else if (jobs.some((job) => job.status === "completed")) {
+            color = "success";
+            marker = "●";
+        } else if (jobs.length > 0) {
+            color = "error";
+            marker = "✕";
+        } else {
+            color = "dim";
+            marker = "○";
+        }
+        const summary =
+            jobs.length === 0
+                ? "idle"
+                : [
+                      running.length > 0 ? `${running.length} running` : undefined,
+                      jobs.filter((job) => job.status === "completed").length > 0
+                          ? `${jobs.filter((job) => job.status === "completed").length} completed`
+                          : undefined,
+                      failed.length > 0 ? `${failed.length} failed/killed` : undefined,
+                  ]
+                      .filter(Boolean)
+                      .join(" · ");
         const latest = jobs[jobs.length - 1];
         const command = latest ? collapseShellCommand(latest.command) : undefined;
-        const elapsed = latest ? Math.floor(((latest.finishedAt ?? Date.now()) - latest.startedAt) / 1000) : undefined;
+        const elapsed = latest
+            ? Math.floor(((latest.finishedAt ?? Date.now()) - latest.startedAt) / 1000)
+            : undefined;
         const component = (suffix: string): Component => ({
-            render: (width) => [truncateToWidth(
-                `${ctx.ui.theme.fg(color, marker)} Shell${suffix ? ctx.ui.theme.fg("muted", ` · ${suffix}`) : ""}`,
-                width,
-            )],
+            render: (width) => [
+                truncateToWidth(
+                    `${ctx.ui.theme.fg(color, marker)} Shell${suffix ? ctx.ui.theme.fg("muted", ` · ${suffix}`) : ""}`,
+                    width,
+                ),
+            ],
             invalidate() {},
         });
         return {
             base: component(""),
             detail: component(summary),
-            full: component([summary, command ? `latest: ${command}` : undefined, elapsed !== undefined ? `${elapsed}s` : undefined].filter(Boolean).join(" · ")),
+            full: component(
+                [
+                    summary,
+                    command ? `latest: ${command}` : undefined,
+                    elapsed !== undefined ? `${elapsed}s` : undefined,
+                ]
+                    .filter(Boolean)
+                    .join(" · "),
+            ),
         };
     }
 
@@ -94,7 +124,8 @@ export class ShellDockContribution {
         const generation = this.generation;
         // A failure arriving after the panel opened has not necessarily been seen. Only
         // the opening snapshot is acknowledged, and only after a successful interaction.
-        const seen = shellManager.getAllJobsList()
+        const seen = shellManager
+            .getAllJobsList()
             .filter((job) => job.status === "failed" || job.status === "killed")
             .map((job) => job.id);
         await openShellInspector(ctx);
