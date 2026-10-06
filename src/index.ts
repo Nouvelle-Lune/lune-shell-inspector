@@ -1,10 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { shellDock } from "./shell/shell-dock.ts";
+import { ShellDockContribution } from "./shell/shell-dock-contribution.ts";
 
 import { shellManager } from "./shell/shell-manager.ts"
-
-import { openShellInspector } from "./shell/shell-inspector.ts";
 
 import { BashTool, BackgroundShellTool, KillBackgroundShellTool } from "./tools/bash-tool.ts";
 import {
@@ -15,6 +13,7 @@ import {
 import { renderBackgroundShellNotificationBox } from "./shell/shell-notification-box.ts";
 
 export default function (pi: ExtensionAPI): void {
+    const dock = new ShellDockContribution();
 
     // Registered once per load: the transcript looks the renderer up by custom type when it draws
     // the message, so a session-scoped registration would only re-register the same function.
@@ -32,21 +31,21 @@ export default function (pi: ExtensionAPI): void {
         | undefined;
 
     pi.on("session_start", (_event, ctx) => {
+        // Release the old context before manager resets can notify its subscribers.
+        unsubscribeShellManager?.();
+        unsubscribeShellManager = undefined;
+        dock.detach({ retired: true });
         // Module state may survive extension reloads, so a new session starts
         // with an explicitly empty shell view.
         shellManager.clearAllJobs();
-        shellDock.setCtx(ctx)
-
         // Restore the shell manager state from the session context.
         shellManager.restoreShellManager(ctx);
 
-        // Drop the previous session's listener first: it closes over a stale
-        // ctx, and duplicate subscriptions would render twice per job update.
-        unsubscribeShellManager?.();
+        dock.attach(ctx);
 
         unsubscribeShellManager =
-            shellManager.subscribe(() => {
-                shellDock.render();
+            shellManager.subscribe((event) => {
+                dock.onManagerEvent(event);
             });
 
         unsubscribeBackgroundShellNotifications?.();
@@ -54,7 +53,6 @@ export default function (pi: ExtensionAPI): void {
         // Register background shell notifications
         unsubscribeBackgroundShellNotifications = registerBackgroundShellNotifications(pi, ctx);
 
-        shellDock.render();
     });
 
     pi.on("session_shutdown", (_event, ctx) => {
@@ -62,7 +60,7 @@ export default function (pi: ExtensionAPI): void {
         // listener would re-render the dock after it was removed.
         unsubscribeShellManager?.();
         unsubscribeShellManager = undefined;
-        shellDock.clear();
+        dock.detach();
         unsubscribeBackgroundShellNotifications?.();
         unsubscribeBackgroundShellNotifications = undefined;
         shellManager.clearAllJobs(pi);
@@ -82,7 +80,7 @@ export default function (pi: ExtensionAPI): void {
     pi.on("session_tree", (_event, ctx) => {
         shellManager.clearAllJobs();
         shellManager.restoreShellManager(ctx);
-        shellDock.render();
+        dock.render();
     });
 
     // Register tools
@@ -99,7 +97,7 @@ export default function (pi: ExtensionAPI): void {
             if (ctx.mode !== "tui") {
                 return;
             }
-            await openShellInspector(ctx);
+            await dock.open(ctx);
         },
     });
 }

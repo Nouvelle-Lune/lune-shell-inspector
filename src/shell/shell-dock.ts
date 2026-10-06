@@ -28,7 +28,7 @@ export class ShellDock {
         }
     }
 
-    setCtx(ctx: ExtensionContext): void {
+    setCtx(ctx: ExtensionContext | undefined): void {
         this.ctx = ctx;
     }
 

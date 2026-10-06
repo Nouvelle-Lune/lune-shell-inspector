@@ -45,8 +45,10 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
-    "@xterm/headless": "^6.0.0"
+    "@xterm/headless": "^6.0.0",
+    "@nouvelle-lune/pi-dock-protocol": "file:../lune-dock/packages/pi-dock-protocol"
   },
+  "bundledDependencies": ["@nouvelle-lune/pi-dock-protocol"],
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=1.0.0",
     "@earendil-works/pi-tui": ">=1.0.0",

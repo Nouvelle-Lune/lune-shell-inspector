@@ -70,6 +70,8 @@ Examples:
 
 The dock updates while jobs are running and disappears when there are no shell jobs to show.
 
+With the optional **Lune Dock** host active, this independent row is replaced by a shared one-line dock. Press Down in an empty main editor, select a module with Left/Right, and press Enter to open its panel directly. Closing the panel returns to dock focus. The plugin publishes its own single-line `base`, `detail`, and `full` Components under Lune Protocol v1 Draft 3; `/dock` controls density, visibility and order. Idle state remains available in the shared Dock, and hiding the plugin keeps its snapshots current. Removing the host restores the independent row.
+
 ## `/shell` inspector
 
 Run:
@@ -139,3 +141,7 @@ npm run tui:demo
 ## License
 
 MIT
+
+Lune Dock can be toggled with `/dock`. Turning it off immediately restores this plugin's
+independent status bar. Its user-level choice is saved in
+`~/.pi/agent/lune-extensions-settings/lune-dock-settings.json` (following `PI_CODING_AGENT_DIR`).
