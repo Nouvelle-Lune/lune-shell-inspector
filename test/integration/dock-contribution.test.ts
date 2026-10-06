@@ -5,9 +5,9 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import {
     getDockRegistry,
     type DockHost,
-} from "@nouvelle-lune/pi-dock-protocol/host";
+} from "lune-dock-protocol/host";
 
-import type { LuneDockProvider } from "@nouvelle-lune/pi-dock-protocol";
+import type { LuneDockProvider } from "lune-dock-protocol";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 
 import luneShellInspector from "../../src/index.ts";
