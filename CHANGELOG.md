@@ -8,7 +8,7 @@
 
 ### Changed
 
-- **Protocol dependency path.** `lune-dock-protocol` now comes from its own
+- **Protocol dependency path.** `@nouvelle-lune/lune-dock-protocol` now comes from its own
   [`lune-dock-protocol`](https://github.com/Nouvelle-Lune/lune-dock-protocol) checkout through
   `file:../lune-dock-protocol`. Reinstall dependencies after updating this checkout.
 
