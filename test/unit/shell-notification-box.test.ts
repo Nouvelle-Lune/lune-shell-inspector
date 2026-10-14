@@ -13,10 +13,10 @@
  * colours separately, and every band row is checked to fill the transcript width exactly.
  */
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 
 import { renderBackgroundShellNotificationBox } from "../../src/shell/shell-notification-box.ts";
 import {
@@ -254,5 +254,308 @@ describe("background shell notification box", () => {
             undefined,
             "an empty batch must fall back to pi's own rendering",
         );
+    });
+});
+
+/** Where Lune Core publishes its theme renderer; Core is an optional peer, so tests publish a fake. */
+const THEME_RENDERER_KEY = Symbol.for("nouvelle-lune.lune-theme-renderer.v1");
+
+type RenderActivityArgs = [activity: any, options: { expanded: boolean }, theme: Theme];
+
+interface FakeThemedComponent extends Component {
+    renderWidths: number[];
+    invalidations: number;
+}
+
+interface FakeRenderer {
+    version: 1;
+    renderActivity: (...args: RenderActivityArgs) => FakeThemedComponent;
+    calls: RenderActivityArgs[];
+    components: FakeThemedComponent[];
+}
+
+/** A renderer that records every call and returns a component whose lines name its creation order. */
+function createFakeRenderer(label = "themed"): FakeRenderer {
+    const renderer: FakeRenderer = {
+        version: 1,
+        calls: [],
+        components: [],
+        renderActivity: (...args) => {
+            const index = renderer.components.length;
+            const component: FakeThemedComponent = {
+                renderWidths: [],
+                invalidations: 0,
+                render(width: number) {
+                    component.renderWidths.push(width);
+                    return [`${label}#${index}@${width}`];
+                },
+                invalidate() {
+                    component.invalidations += 1;
+                },
+            };
+
+            renderer.calls.push(args);
+            renderer.components.push(component);
+
+            return component;
+        },
+    };
+
+    return renderer;
+}
+
+function publishRenderer(renderer: unknown): void {
+    (globalThis as Record<symbol, unknown>)[THEME_RENDERER_KEY] = renderer;
+}
+
+function createBox(
+    batch: readonly BackgroundShellNotification[],
+    options: { expanded?: boolean } = {},
+): { box: Component; theme: Theme } {
+    const { content, details } = buildBackgroundShellNotification(batch);
+    const { theme } = createStubTheme();
+    const box = renderBackgroundShellNotificationBox(
+        { content, details },
+        { expanded: options.expanded ?? false, outputPad: 1 },
+        theme,
+    );
+
+    assert.ok(box, "guard: the batch must render a box");
+
+    return { box, theme };
+}
+
+describe("background shell notification box under Lune Core's theme", () => {
+    // The renderer lives on globalThis, so a leaked value would retheme every later test.
+    afterEach(() => {
+        delete (globalThis as Record<symbol, unknown>)[THEME_RENDERER_KEY];
+    });
+
+    it("draws its own band when no renderer is published", () => {
+        const { box } = createBox([job()]);
+
+        const actual = box.render(WIDTH).map((line) => line.trimEnd());
+
+        assert.equal(actual[1], " ● 1 background shell settled");
+    });
+
+    it("draws its own band when the published renderer has another version", () => {
+        const renderer = { ...createFakeRenderer(), version: 2 };
+        publishRenderer(renderer);
+        const { box } = createBox([job()]);
+
+        const actual = box.render(WIDTH).map((line) => line.trimEnd());
+
+        assert.equal(actual[1], " ● 1 background shell settled");
+        assert.equal(renderer.calls.length, 0, "an unknown contract version must not be called");
+    });
+
+    it("returns the themed component's lines and passes the theme through", () => {
+        const renderer = createFakeRenderer();
+        publishRenderer(renderer);
+        const { box, theme } = createBox([job()]);
+
+        const actual = box.render(WIDTH);
+
+        assert.deepEqual(actual, [`themed#0@${WIDTH}`]);
+        assert.equal(renderer.calls.length, 1);
+        assert.equal(renderer.calls[0]![2], theme);
+    });
+
+    it("maps one job to a singular activity without a summary", () => {
+        const renderer = createFakeRenderer();
+        publishRenderer(renderer);
+        const { box } = createBox([
+            job({
+                jobCommand: "npm run\n  build\t--watch",
+                jobStatus: "completed",
+                jobExitCode: 0,
+                jobDurationMs: 4200,
+                jobOutput: "line 1\nline 2\n",
+            }),
+        ]);
+
+        box.render(WIDTH);
+
+        const expected = {
+            title: "background shell",
+            summary: undefined,
+            entries: [
+                {
+                    name: "bash",
+                    summary: "npm run build --watch",
+                    status: "done",
+                    detail: "exit 0",
+                    durationMs: 4200,
+                    error: undefined,
+                    output: "line 1\nline 2\n",
+                },
+            ],
+        };
+
+        assert.deepEqual(renderer.calls[0]![0], expected);
+    });
+
+    it("maps several jobs to a plural activity with one entry per job and its own output slice", () => {
+        const renderer = createFakeRenderer();
+        publishRenderer(renderer);
+        const { box } = createBox([
+            job({ jobId: "job-a", jobCommand: "echo a", jobOutput: "a-out\n" }),
+            job({
+                jobId: "job-b",
+                jobCommand: "make test",
+                jobStatus: "failed",
+                jobExitCode: 3,
+                jobError: "Background shell exited with code 3",
+                jobOutput: "b-out\n",
+                jobDurationMs: 90,
+            }),
+        ]);
+
+        box.render(WIDTH);
+
+        const expected = {
+            title: "background shells",
+            summary: "2 jobs",
+            entries: [
+                {
+                    name: "bash",
+                    summary: "echo a",
+                    status: "done",
+                    detail: "exit 0",
+                    durationMs: 4200,
+                    error: undefined,
+                    output: "a-out\n",
+                },
+                {
+                    name: "bash",
+                    summary: "make test",
+                    status: "failed",
+                    detail: "exit 3",
+                    durationMs: 90,
+                    error: "Background shell exited with code 3",
+                    output: "b-out\n",
+                },
+            ],
+        };
+
+        assert.deepEqual(renderer.calls[0]![0], expected);
+    });
+
+    it("maps completed to done, killed to cancelled and every other status to failed", () => {
+        const renderer = createFakeRenderer();
+        publishRenderer(renderer);
+        const statuses = ["completed", "killed", "failed", "timeout"];
+        const { box } = createBox(statuses.map((jobStatus, index) => job({ jobId: `job-${index}`, jobStatus })));
+
+        box.render(WIDTH);
+
+        const actual = renderer.calls[0]![0].entries.map((entry: { status: string }) => entry.status);
+
+        assert.deepEqual(actual, ["done", "cancelled", "failed", "failed"]);
+    });
+
+    it("omits the exit detail and duration when the job has neither", () => {
+        const renderer = createFakeRenderer();
+        publishRenderer(renderer);
+        const { box } = createBox([
+            job({ jobStatus: "killed", jobExitCode: undefined, jobDurationMs: undefined }),
+        ]);
+
+        box.render(WIDTH);
+
+        const [entry] = renderer.calls[0]![0].entries;
+
+        assert.equal(entry.detail, undefined);
+        assert.equal(entry.durationMs, undefined);
+    });
+
+    it("normalises output like the band: carriage-return redraws keep the last segment and terminal sequences go", () => {
+        const renderer = createFakeRenderer();
+        publishRenderer(renderer);
+        const { box } = createBox([
+            job({ jobOutput: "\x1b[31mred\x1b[0m\nprogress 10%\rprogress 100%\ncrlf line\r\ntrailing\twith tab\n" }),
+        ]);
+
+        box.render(WIDTH);
+
+        const actual = renderer.calls[0]![0].entries[0].output;
+        const expected = "red\nprogress 100%\ncrlf line\ntrailing   with tab\n";
+
+        assert.equal(actual, expected);
+    });
+
+    it("calls the renderer once across repeated renders and reuses its component", () => {
+        const renderer = createFakeRenderer();
+        publishRenderer(renderer);
+        const { box } = createBox([job()]);
+
+        box.render(WIDTH);
+        box.render(WIDTH);
+        const actual = box.render(40);
+
+        assert.equal(renderer.calls.length, 1);
+        assert.deepEqual(renderer.components[0]!.renderWidths, [WIDTH, WIDTH, 40]);
+        assert.deepEqual(actual, ["themed#0@40"]);
+    });
+
+    it("builds a new component when a different renderer object appears", () => {
+        const first = createFakeRenderer("first");
+        const second = createFakeRenderer("second");
+        const { box } = createBox([job()]);
+
+        publishRenderer(first);
+        const before = box.render(WIDTH);
+        publishRenderer(second);
+        const after = box.render(WIDTH);
+        box.render(WIDTH);
+
+        assert.deepEqual(before, [`first#0@${WIDTH}`]);
+        assert.deepEqual(after, [`second#0@${WIDTH}`]);
+        assert.equal(first.calls.length, 1);
+        assert.equal(second.calls.length, 1, "the second renderer is also called once, not per frame");
+    });
+
+    it("switches a box already on screen to the themed renderer and back", () => {
+        const renderer = createFakeRenderer();
+        const { box } = createBox([job()]);
+
+        const plainBefore = box.render(WIDTH).map((line) => line.trimEnd());
+
+        publishRenderer(renderer);
+        const themed = box.render(WIDTH);
+
+        delete (globalThis as Record<symbol, unknown>)[THEME_RENDERER_KEY];
+        const plainAfter = box.render(WIDTH).map((line) => line.trimEnd());
+
+        assert.equal(plainBefore[1], " ● 1 background shell settled");
+        assert.deepEqual(themed, [`themed#0@${WIDTH}`]);
+        assert.deepEqual(plainAfter, plainBefore, "turning the theme off restores the unchanged band");
+    });
+
+    it("forwards the expanded option", () => {
+        const collapsed = createFakeRenderer();
+        const expanded = createFakeRenderer();
+
+        publishRenderer(collapsed);
+        createBox([job()], { expanded: false }).box.render(WIDTH);
+        publishRenderer(expanded);
+        createBox([job()], { expanded: true }).box.render(WIDTH);
+
+        assert.deepEqual(collapsed.calls[0]![1], { expanded: false });
+        assert.deepEqual(expanded.calls[0]![1], { expanded: true });
+    });
+
+    it("invalidates the themed component, and is safe to call before one exists", () => {
+        const renderer = createFakeRenderer();
+        const { box } = createBox([job()]);
+
+        box.invalidate();
+        publishRenderer(renderer);
+        box.render(WIDTH);
+        box.invalidate();
+        box.invalidate();
+
+        assert.equal(renderer.components[0]!.invalidations, 2);
     });
 });

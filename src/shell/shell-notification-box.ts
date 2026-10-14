@@ -29,6 +29,42 @@ const BODY_INDENT = "    ";
 const EXPAND_KEY = "ctrl+o";
 
 /**
+ * Lune theme renderer key. The `pi-lune-core-theme` extension publishes the renderer only while
+ * it draws the transcript, so a missing value means the theme is off or not installed.
+ */
+const LUNE_THEME_RENDERER = Symbol.for("nouvelle-lune.lune-theme-renderer.v1");
+
+/** The part of the theme's renderer contract this box uses; the theme is never a dependency. */
+interface LuneThemeRenderer {
+    readonly version: 1;
+    renderActivity(
+        activity: {
+            title: string;
+            summary?: string;
+            entries: readonly {
+                name: string;
+                summary?: string;
+                status: "running" | "done" | "failed" | "cancelled";
+                detail?: string;
+                durationMs?: number;
+                error?: string;
+                output?: string;
+            }[];
+        },
+        options: { expanded: boolean },
+        theme: Theme,
+    ): Component;
+}
+
+function luneThemeRenderer(): LuneThemeRenderer | undefined {
+    const renderer = (globalThis as Record<symbol, unknown>)[LUNE_THEME_RENDERER] as
+        | LuneThemeRenderer
+        | undefined;
+
+    return renderer?.version === 1 ? renderer : undefined;
+}
+
+/**
  * Render one batched notification as a tool-result band: a status header, one row per settled job
  * and the tail of each job's output.
  *
@@ -61,6 +97,9 @@ export function renderBackgroundShellNotificationBox(
  * wrapped against the width left after the band padding and the body indent, and that width is only
  * known in `render()`. Lines are cached per width: the transcript renders the box on every frame
  * while other output streams, and pi rebuilds the component on each expand or padding change.
+ *
+ * While the Lune theme is active the box draws its activity card instead. The renderer is
+ * looked up on every frame because the theme can be switched while the message stays on screen.
  */
 class BackgroundShellNotificationBox implements Component {
     private readonly jobs: readonly BackgroundShellNotificationJobDetails[];
@@ -71,6 +110,7 @@ class BackgroundShellNotificationBox implements Component {
 
     private cachedWidth: number | undefined;
     private cachedLines: string[] | undefined;
+    private themed: { renderer: LuneThemeRenderer; component: Component } | undefined;
 
     constructor(
         jobs: readonly BackgroundShellNotificationJobDetails[],
@@ -88,9 +128,25 @@ class BackgroundShellNotificationBox implements Component {
     invalidate(): void {
         this.cachedWidth = undefined;
         this.cachedLines = undefined;
+        this.themed?.component.invalidate();
     }
 
     render(width: number): string[] {
+        const renderer = luneThemeRenderer();
+
+        if (renderer) {
+            if (this.themed?.renderer !== renderer) {
+                this.themed = {
+                    renderer,
+                    component: renderer.renderActivity(this.activity(), { expanded: this.expanded }, this.theme),
+                };
+            }
+
+            return this.themed.component.render(width);
+        }
+
+        this.themed = undefined;
+
         if (this.cachedLines !== undefined && this.cachedWidth === width) {
             return this.cachedLines;
         }
@@ -126,6 +182,29 @@ class BackgroundShellNotificationBox implements Component {
 
         // One blank band row above and below, like pi's tool result box.
         return ["", ...rows, ""].map((row) => this.band(row, inner, paddingX));
+    }
+
+    /**
+     * The batch as the theme's call tree: one `bash` entry per job, like the theme's own bash rows.
+     *
+     * A killed job was stopped on request, which the theme's vocabulary calls cancelled rather than failed.
+     */
+    private activity(): Parameters<LuneThemeRenderer["renderActivity"]>[0] {
+        const total = this.jobs.length;
+
+        return {
+            title: total === 1 ? "background shell" : "background shells",
+            summary: total === 1 ? undefined : `${total} jobs`,
+            entries: this.jobs.map((job) => ({
+                name: "bash",
+                summary: collapseShellCommand(job.command),
+                status: job.status === "completed" ? "done" : job.status === "killed" ? "cancelled" : "failed",
+                detail: job.exitCode === undefined ? undefined : `exit ${job.exitCode}`,
+                durationMs: job.durationMs,
+                error: job.error,
+                output: this.outputText(job).split("\n").map(displayLine).join("\n"),
+            })),
+        };
     }
 
     /** `<n> background shells settled` / `… failed`, coloured by the batch's worst outcome. */

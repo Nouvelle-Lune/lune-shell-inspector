@@ -5,6 +5,7 @@
 ### Added
 
 - **Optional Lune Dock integration.** When Lune Dock is active, shell state joins its single status row and Enter opens the existing inspector. Viewing the inspector acknowledges current failure reminders without changing job outcomes; without the host, the standalone dock remains available.
+- **Notifications follow the Lune theme.** While the `pi-lune-core-theme` extension is on, settled background shells render as its call tree, with killed jobs marked as cancelled. With the theme off or not installed, the existing band remains, and notifications already on screen switch with the theme.
 
 ### Changed
 
